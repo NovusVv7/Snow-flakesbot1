@@ -1,0 +1,12 @@
+Yaml
+
+
+services:
+  - type: web
+    name: snowflakes-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: 7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc
+        fromSecret: your-telegram-bot-token
