@@ -1,144 +1,222 @@
-import json, random, os
+import json
+import random
+import asyncio
 from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message
 from aiogram.utils import executor
+import os
 
-OWNER_ID = 123456789  # <-- замени на свой user_id
-TOKEN = os.getenv("API_TOKEN") or "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
-
-bot = Bot(token=TOKEN)
+API_TOKEN = os.getenv("API_TOKEN")
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
+DB_FILE = "db.json"
+ADMINS = [123456789]  # ЗАМЕНИ на свой Telegram user ID
+
 def load_db():
-    return json.load(open("db.json")) if os.path.exists("db.json") else {"banned": [], "history": {}}
+    try:
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 def save_db(db):
-    json.dump(db, open("db.json", "w"))
+    with open(DB_FILE, "w") as f:
+        json.dump(db, f)
 
-def get_balance(uid):
+def get_user(user_id):
     db = load_db()
-    if str(uid) not in db:
-        db[str(uid)] = 1000
-        save_db(db)
-    return db[str(uid)]
+    return db.get(str(user_id), {"balance": 1000, "banned": False, "history": []})
 
-def update_balance(uid, val):
+def update_user(user_id, user_data):
     db = load_db()
-    db[str(uid)] = db.get(str(uid), 1000) + val
+    db[str(user_id)] = user_data
     save_db(db)
 
-def add_history(uid, entry):
-    db = load_db()
-    uid = str(uid)
-    if uid not in db["history"]:
-        db["history"][uid] = []
-    db["history"][uid].append(entry)
-    save_db(db)
+def change_balance(user_id, amount, action=""):
+    user = get_user(user_id)
+    user["balance"] += amount
+    user["history"].append(f"{'+' if amount >= 0 else ''}{amount} ({action})")
+    update_user(user_id, user)
 
-@dp.message_handler(commands=["start"])
-async def start(m: types.Message):
-    if str(m.from_user.id) in load_db().get("banned", []):
-        return
-    get_balance(m.from_user.id)
-    await m.answer("Добро пожаловать! У тебя снежинки — валюта. Напиши 'Го red 100', 'мины 100' или 'П @юзер 100'.")
+def is_banned(user_id):
+    return get_user(user_id).get("banned", False)
 
-@dp.message_handler(commands=["снег"])
-async def snow(m: types.Message):
-    if str(m.from_user.id) in load_db().get("banned", []):
+@dp.message_handler(lambda m: m.text.lower() == "б")
+async def check_balance(message: Message):
+    if is_banned(message.from_user.id):
+        await message.reply("Вы забанены.")
         return
-    await m.answer(f"У тебя {get_balance(m.from_user.id)} снежинок.")
+    bal = get_user(message.from_user.id)["balance"]
+    await message.reply(f"У вас {bal} снежинок.")
 
-@dp.message_handler(lambda m: m.text.lower().startswith("го"))
-async def roulette(m: types.Message):
-    if str(m.from_user.id) in load_db().get("banned", []):
+# Админ-команды
+@dp.message_handler(commands=["выдать", "отнять", "забанить", "история", "перевод"])
+async def admin_commands(message: Message):
+    if message.from_user.id not in ADMINS:
         return
-    args = m.text.lower().split()
-    if len(args) != 3:
-        return await m.answer("Пример: Го red 100")
-    choice, bet = args[1], int(args[2])
-    if bet > get_balance(m.from_user.id):
-        return await m.answer("Недостаточно снежинок.")
-    num = random.randint(0, 36)
-    color = "green" if num == 0 else "black" if num % 2 == 0 else "red"
-    parity = "even" if num % 2 == 0 else "odd"
-    win = choice == color or choice == parity
-    update_balance(m.from_user.id, bet if win else -bet)
-    await m.answer(f"Выпало {num} ({color}), {'четное' if parity=='even' else 'нечетное'} — {'Победа!' if win else 'Проигрыш!'}")
 
-@dp.message_handler(lambda m: m.text.lower().startswith("мины"))
-async def mines(m: types.Message):
-    if str(m.from_user.id) in load_db().get("banned", []):
+    parts = message.text.split()
+    if message.text.startswith("/выдать") and len(parts) == 3:
+        uid, amount = int(parts[1]), int(parts[2])
+        change_balance(uid, amount, "выдача")
+        await message.reply("Выдано.")
+    elif message.text.startswith("/отнять") and len(parts) == 3:
+        uid, amount = int(parts[1]), int(parts[2])
+        change_balance(uid, -amount, "отнятие")
+        await message.reply("Отнято.")
+    elif message.text.startswith("/забанить") and len(parts) == 2:
+        uid = int(parts[1])
+        user = get_user(uid)
+        user["banned"] = True
+        update_user(uid, user)
+        await message.reply("Забанен.")
+    elif message.text.startswith("/история") and len(parts) == 2:
+        uid = int(parts[1])
+        history = get_user(uid).get("history", [])
+        await message.reply("\n".join(history[-10:]) or "История пуста.")
+    elif message.text.startswith("/перевод") and len(parts) == 3:
+        to_id, amount = int(parts[1]), int(parts[2])
+        from_id = message.from_user.id
+        if get_user(from_id)["balance"] < amount:
+            await message.reply("Недостаточно снежинок.")
+            return
+        change_balance(from_id, -amount, "перевод")
+        change_balance(to_id, amount, "получено")
+        await message.reply("Перевод выполнен.")
+
+# Рулетка
+pending_bets = {}
+
+@dp.message_handler()
+async def all_text_handler(message: Message):
+    user_id = message.from_user.id
+    if is_banned(user_id):
+        await message.reply("Вы забанены.")
         return
-    args = m.text.lower().split()
-    if len(args) != 2:
-        return await m.answer("Пример: мины 100")
-    bet = int(args[1])
-    if bet > get_balance(m.from_user.id):
-        return await m.answer("Недостаточно снежинок.")
-    win = random.randint(1, 10) == 1
-    if win:
-        prize = int(bet * 1042)
-        update_balance(m.from_user.id, prize)
-        return await m.answer(f"БУМ! Ты победил и получил {prize} снежинок!")
+
+    text = message.text.lower().strip()
+    parts = text.split()
+
+    # Ставка на рулетку
+    if len(parts) == 2 and parts[0].isdigit() and (parts[1].isdigit() or parts[1] in ["odd", "even"]):
+        amount = int(parts[0])
+        bet = parts[1]
+        bal = get_user(user_id)["balance"]
+        if amount > bal:
+            await message.reply("Недостаточно снежинок.")
+            return
+        pending_bets[user_id] = {"amount": amount, "bet": bet}
+        await message.reply(f"Ставка {amount} на {bet} принята. Запуск через 5 секунд...")
+        await asyncio.sleep(5)
+        await roulette_spin(user_id, message)
+        return
+
+    # Команды для мин
+    if text.startswith("м "):
+        await mines_click(message)
+    elif text == "забрать":
+        await mines_cashout(message)
+
+# Рулетка обработка
+async def roulette_spin(user_id, message):
+    data = pending_bets.pop(user_id, None)
+    if not data:
+        return
+    number = random.randint(0, 36)
+    amount = data["amount"]
+    bet = data["bet"]
+    win = False
+    if bet == "odd" and number % 2 == 1:
+        win = True
+        payout = amount * 2
+    elif bet == "even" and number % 2 == 0 and number != 0:
+        win = True
+        payout = amount * 2
+    elif bet.isdigit() and int(bet) == number:
+        win = True
+        payout = amount * 36
     else:
-        update_balance(m.from_user.id, -bet)
-        return await m.answer("Мина взорвалась! Снежинки потеряны.")
+        payout = 0
 
-@dp.message_handler(lambda m: m.text.lower().startswith("п "))
-async def pay(m: types.Message):
-    if str(m.from_user.id) in load_db().get("banned", []):
+    if win:
+        change_balance(user_id, payout, "рулетка +")
+        result = f"Выпало {number}. Победа! +{payout} снежинок."
+    else:
+        change_balance(user_id, -amount, "рулетка -")
+        result = f"Выпало {number}. Проигрыш. -{amount} снежинок."
+    await message.reply(result)
+
+# Мины
+active_mines = {}  # user_id: {"grid": [...], "revealed": set(), "amount": int}
+
+def generate_mines_grid(size=5, mines=5):
+    grid = [["⬜" for _ in range(size)] for _ in range(size)]
+    positions = random.sample(range(size*size), mines)
+    for pos in positions:
+        x, y = divmod(pos, size)
+        grid[x][y] = "💣"
+    return grid
+
+def render_grid(grid, revealed):
+    text = ""
+    for i, row in enumerate(grid):
+        for j, cell in enumerate(row):
+            text += cell if (i, j) in revealed or cell == "💣" else "▪️"
+        text += "\n"
+    return text
+
+@dp.message_handler(commands=["мины"])
+async def start_mines(message: Message):
+    user_id = message.from_user.id
+    if is_banned(user_id):
+        await message.reply("Вы забанены.")
         return
-    args = m.text.split()
-    if len(args) != 3 or not m.entities or m.entities[1].type != "mention":
-        return await m.answer("Пример: П @юзер 100")
-    target_name = args[1].replace("@", "")
-    amount = int(args[2])
-    if amount > get_balance(m.from_user.id):
-        return await m.answer("Недостаточно снежинок.")
-    users = await bot.get_chat_administrators(m.chat.id) if m.chat else []
-    target_id = None
-    for user in users:
-        if user.user.username and user.user.username.lower() == target_name.lower():
-            target_id = user.user.id
-            break
-    if not target_id:
-        return await m.answer("Пользователь не найден.")
-    update_balance(m.from_user.id, -amount)
-    update_balance(target_id, amount)
-    add_history(m.from_user.id, f"Отправил {amount} -> {target_id}")
-    add_history(target_id, f"Получил {amount} <- {m.from_user.id}")
-    await m.answer(f"Перевод {amount} снежинок отправлен @{target_name}.")
+    bal = get_user(user_id)["balance"]
+    if bal < 100:
+        await message.reply("Нужно минимум 100 снежинок.")
+        return
+    grid = generate_mines_grid()
+    active_mines[user_id] = {"grid": grid, "revealed": set(), "amount": 100}
+    change_balance(user_id, -100, "ставка в мины")
+    await message.reply("Игра началась! Введите `м 1 2` чтобы открыть клетку.\n" + render_grid(grid, set()))
 
-@dp.message_handler(lambda m: m.from_user.id == OWNER_ID)
-async def admin(m: types.Message):
-    args = m.text.lower().split()
-    if "выдать" in args and len(args) == 3:
-        target = m.entities[1].user.id if m.entities and len(m.entities) > 1 else None
-        if not target:
-            return await m.answer("Укажи пользователя.")
-        update_balance(target, int(args[2]))
-        return await m.answer("Снежинки выданы.")
-    elif "отнять" in args and len(args) == 3:
-        target = m.entities[1].user.id if m.entities and len(m.entities) > 1 else None
-        if not target:
-            return await m.answer("Укажи пользователя.")
-        update_balance(target, -int(args[2]))
-        return await m.answer("Снежинки отняты.")
-    elif "бан" in args:
-        target = m.entities[1].user.id if m.entities and len(m.entities) > 1 else None
-        db = load_db()
-        db["banned"].append(str(target))
-        save_db(db)
-        return await m.answer("Забанен.")
-    elif "разбан" in args:
-        target = m.entities[1].user.id if m.entities and len(m.entities) > 1 else None
-        db = load_db()
-        db["banned"] = [u for u in db["banned"] if u != str(target)]
-        save_db(db)
-        return await m.answer("Разбанен.")
-    elif "история" in args:
-        target = m.entities[1].user.id if m.entities and len(m.entities) > 1 else None
-        h = load_db().get("history", {}).get(str(target), ["История пуста."])
-        return await m.answer("\n".join(h[-10:]))
+async def mines_click(message: Message):
+    user_id = message.from_user.id
+    if user_id not in active_mines:
+        await message.reply("Игра не начата. Напишите /мины.")
+        return
+    try:
+        _, x, y = message.text.split()
+        x, y = int(x), int(y)
+    except:
+        await message.reply("Формат: м x y")
+        return
+
+    data = active_mines[user_id]
+    grid = data["grid"]
+    revealed = data["revealed"]
+    if (x, y) in revealed:
+        await message.reply("Клетка уже открыта.")
+        return
+
+    revealed.add((x, y))
+    if grid[x][y] == "💣":
+        await message.reply("Бум! Вы подорвались.\n" + render_grid(grid, revealed))
+        del active_mines[user_id]
+    else:
+        await message.reply("Успешно!\n" + render_grid(grid, revealed))
+
+async def mines_cashout(message: Message):
+    user_id = message.from_user.id
+    if user_id not in active_mines:
+        await message.reply("У вас нет активной игры.")
+        return
+    data = active_mines.pop(user_id)
+    safe_cells = len(data["revealed"])
+    winnings = int(data["amount"] * (1 + safe_cells * 0.42))
+    change_balance(user_id, winnings, "выигрыш мины")
+    await message.reply(f"Вы забрали {winnings} снежинок за {safe_cells} безопасных клеток.")
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
