@@ -1,277 +1,199 @@
 
-import json
-import os
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import random
-from telegram import Update
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
-TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"  # вставьте ваш токен
-ADMINS = ['6359584002']
-DATA_FILE = "data.json"
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    return {
-        "user_balance": {},
-        "banned_users": [],
-        "user_bets": {},
-        "total_players": 0
-    }
+users = {}
+current_roulette_bets = {}  # Для хранения ставок каждого пользователя
+current_mines = {}  # Для хранения состояния мин
 
-def save_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+START_BALANCE = 60000
 
-data = load_data()
-
-# Обработка сообщений
-def handle_message(update: Update, context: CallbackContext):
-    global data
-    user_id = str(update.effective_user.id)
-    text = update.message.text.strip().lower()
-
-    # Регистрация нового пользователя
-    if user_id not in data["user_balance"]:
-        data["user_balance"][user_id] = 10000
-        data["total_players"] += 1
-        save_data(data)
-
-    # Проверка заблокированных
-    if user_id in data["banned_users"]:
-        update.message.reply_text("🚫 Вы заблокированы!")
-        return
-
-    # Баланс
-    if text in ['б', '/баланс', 'баланс']:
-        balance = data["user_balance"].get(user_id, 0)
-        update.message.reply_text(f"❄️ Твой баланс: {balance} снежинок❄️")
-        return
-
-    # Отмена ставки
-    if text == '/отмена':
-        if user_id in data["user_bets"]:
-            del data["user_bets"][user_id]
-            save_data(data)
-            update.message.reply_text("🚫 Ваша ставка отменена.")
-        else:
-            update.message.reply_text("❗ У вас нет активной ставки.")
-        return
-
-    # Запуск рулетки
-    if text == 'го':
-        start_roulette(update, context, user_id)
-        return
-
-    # Обработка ставок
-    handle_bet_message(update, context, user_id, text)
-
-def handle_bet_message(update: Update, context: CallbackContext, user_id, text):
-    global data
-    if user_id in data["user_bets"]:
-        update.message.reply_text("❗ У вас уже есть активная ставка. Подождите результата.")
-        return
-
-    try:
-        parts = text.split()
-        amount = int(parts[0])
-        bet_input = ' '.join(parts[1:])
-
-        balance = data["user_balance"].get(user_id, 0)
-        if amount <= 0:
-            update.message.reply_text("❌ Сумма должна быть больше 0.")
-            return
-        if amount > balance:
-            update.message.reply_text("❌ Недостаточно снежинок❄️.")
-            return
-
-        # Анализ ставки
-        if '-' in bet_input:
-            start_end = bet_input.split('-')
-            start, end = int(start_end[0]), int(start_end[1])
-            if not (0 <= start <= end <= 36):
-                update.message.reply_text("❌ Неверный диапазон.")
-                return
-            bet_type = 'range'
-            bet_value = {'start': start, 'end': end}
-        elif bet_input in ['красный', 'red']:
-            bet_type = 'color'
-            bet_value = 'красный'
-        elif bet_input in ['черный', 'black']:
-            bet_type = 'color'
-            bet_value = 'черный'
-        elif bet_input in ['нечет', 'нечет', 'odd']:
-            bet_type = 'parity'
-            bet_value = 'нечет'
-        elif bet_input in ['чет', 'even']:
-            bet_type = 'parity'
-            bet_value = 'чет'
-        elif all(c.isdigit() or c == ' ' for c in bet_input):
-            nums = list(set(int(n) for n in bet_input.split() if n.isdigit()))
-            if all(0 <= n <= 36 for n in nums):
-                bet_type = 'multiple'
-                bet_value = nums
-            else:
-                update.message.reply_text("❌ Неверные числа.")
-                return
-        elif len(parts) == 2 and parts[1].isdigit():
-            num = int(parts[1])
-            if 0 <= num <= 36:
-                bet_type = 'number'
-                bet_value = num
-            else:
-                update.message.reply_text("❌ Неверное число.")
-                return
-        else:
-            update.message.reply_text("❌ Неизвестный формат ставки.")
-            return
-
-        # Сохраняем ставку
-        data["user_bets"][user_id] = {
-            'amount': amount,
-            'type': bet_type,
-            'value': bet_value,
-            'balance': balance
+# Функция для получения данных пользователя
+def get_user(user_id):
+    if user_id not in users:
+        users[user_id] = {
+            'balance': START_BALANCE,
+            'snowflakes': 0,
+            'banned': False
         }
-        save_data(data)
+    return users[user_id]
 
-        # Запускаем рулетку
-        start_roulette(update, context, user_id)
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    await update.message.reply_text(
+        f"Привет! Добро пожаловать! Ваш баланс: {user['balance']} снежинок."
+    )
 
-    except Exception as e:
-        print(f"Ошибка: {e}")
-        update.message.reply_text("❌ Ошибка обработки ставки.")
+# Команда /balance
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    await update.message.reply_text(f"Ваш баланс: {user['balance']} снежинок.")
 
-def start_roulette(update, context, user_id):
-    global data
-    result_number = random.randint(0,36)
-    red_numbers = [1,3,5,7,9,12,14,16,19,21,23,25,27,30,32,34,36]
-    color = 'красный' if result_number in red_numbers else 'черный'
-    parity = 'нечет' if result_number % 2 == 1 else 'чет'
-
-    bet = data["user_bets"].get(user_id)
-    if not bet:
+# Команда /give
+async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 2:
+        await update.message.reply_text("Используйте /give <айди> <количество>")
         return
-
-    amount = bet['amount']
-    balance = bet['balance']
-    win = False
-    payout = 0
-
-    # Проверка выигрыша
-    if bet['type'] == 'range':
-        s, e = bet['value']['start'], bet['value']['end']
-        if s <= result_number <= e:
-            win = True
-            payout = amount * (36 / (e - s + 1))
-    elif bet['type'] == 'color':
-        if bet['value'] == color:
-            win = True
-            payout = amount * 2
-    elif bet['type'] == 'parity':
-        if bet['value'] == parity:
-            win = True
-            payout = amount * 2
-    elif bet['type'] == 'multiple':
-        if result_number in bet['value']:
-            win = True
-            payout = amount * 35
-    elif bet['type'] == 'number':
-        if bet['value'] == result_number:
-            win = True
-            payout = amount * 36
-
-    if win:
-        new_balance = int(balance + payout)
-        data["user_balance"][user_id] = new_balance
-        msg = f"🎉 Выпало число: *{result_number}* ({color}, {parity})\n🎉 Вы выиграли! +{int(payout)} снежинок❄️"
-    else:
-        new_balance = int(balance - amount)
-        data["user_balance"][user_id] = new_balance
-        msg = f"🎲 Выпало число: *{result_number}* ({color}, {parity})\n❌ Вы проиграли {amount} снежинок❄️"
-
-    # Удаляем ставку
-    del data["user_bets"][user_id]
-    save_data(data)
-
-    # Отправляем результат
-    context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
-
-def handle_command(update, context):
-    global data
-    user_id = str(update.effective_user.id)
-    parts = update.message.text.split()
-    cmd = parts[0]
-
-    if user_id not in ADMINS:
+    try:
+        target_id = int(context.args[0])
+        amount = int(context.args[1])
+    except:
+        await update.message.reply_text("Некорректные параметры.")
         return
+    giver = get_user(update.effective_user.id)
+    if giver['balance'] < amount:
+        await update.message.reply_text("Недостаточно снежинок.")
+        return
+    target = get_user(target_id)
+    giver['balance'] -= amount
+    target['snowflakes'] += amount
+    await update.message.reply_text(f"Вы передали {amount} снежинок пользователю {target_id}.")
 
-    if cmd == '/выдать':
-        try:
-            target_id = parts[1]
-            amount = int(parts[2])
-            data["user_balance"][target_id] = data["user_balance"].get(target_id, 0) + amount
-            update.message.reply_text(f"✅ Выдано {amount} снежинок пользователю {target_id}")
-        except:
-            update.message.reply_text("❌ Формат: /выдать [user_id] [amount]")
-        save_data(data)
-    elif cmd == '/забрать':
-        try:
-            target_id = parts[1]
-            amount = int(parts[2])
-            if data["user_balance"].get(target_id, 0) < amount:
-                update.message.reply_text("❌ У пользователя недостаточно средств")
-                return
-            data["user_balance"][target_id] -= amount
-            update.message.reply_text(f"✅ Забрано {amount} снежинок у пользователя {target_id}")
-        except:
-            update.message.reply_text("❌ Формат: /забрать [user_id] [amount]")
-        save_data(data)
-    elif cmd == '/бан':
-        try:
-            target_id = parts[1]
-            if target_id not in data["banned_users"]:
-                data["banned_users"].append(target_id)
-                update.message.reply_text(f"✅ Пользователь {target_id} заблокирован")
-            else:
-                update.message.reply_text("ℹ️ Пользователь уже заблокирован")
-        except:
-            update.message.reply_text("❌ Формат: /бан [user_id]")
-        save_data(data)
-    elif cmd == '/разбан':
-        try:
-            target_id = parts[1]
-            if target_id in data["banned_users"]:
-                data["banned_users"].remove(target_id)
-                update.message.reply_text(f"✅ Пользователь {target_id} разблокирован")
-            else:
-                update.message.reply_text("ℹ️ Пользователь не заблокирован")
-        except:
-            update.message.reply_text("❌ Формат: /разбан [user_id]")
-        save_data(data)
-    elif cmd == '/топ':
-        top_list = sorted(data["user_balance"].items(), key=lambda x: x[1], reverse=True)[:10]
-        msg = "🔥 Топ игроков:\n"
-        for i, (uid, bal) in enumerate(top_list, 1):
-            msg += f"{i}. Пользователь {uid}: {bal} снежинок❄️\n"
-        update.message.reply_text(msg)
+# Команда /бан
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != YOUR_ADMIN_ID:
+        await update.message.reply_text("Нет прав.")
+        return
+    if len(context.args) != 1:
+        await update.message.reply_text("Используйте /ban <айди>")
+        return
+    user_id = int(context.args[0])
+    user = get_user(user_id)
+    user['banned'] = True
+    await update.message.reply_text(f"Пользователь {user_id} забанен.")
 
-def main():
-    updater = Updater(TOKEN)
-    dp = updater.dispatcher
+# Обработка сообщений для автоматической ставки на рулетку
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    if user['banned']:
+        return
+    # Обработка команды "отмена"
+    if "отмена" in text:
+        if user_id in current_roulette_bets:
+            del current_roulette_bets[user_id]
+            await update.message.reply_text("Ваша ставка отменена.")
+        if user_id in current_mines:
+            del current_mines[user_id]
+            await update.message.reply_text("Игра мин отменена.")
 
-    dp.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("Напишите 'Го' чтобы начать игру.")))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    dp.add_handler(CommandHandler('выдать', handle_command))
-    dp.add_handler(CommandHandler('забрать', handle_command))
-    dp.add_handler(CommandHandler('бан', handle_command))
-    dp.add_handler(CommandHandler('разбан', handle_command))
-    dp.add_handler(CommandHandler('топ', handle_command))
+    # Игра "Мины" без /mine
+    if "мины" in text:
+        await start_mines(update, context)
 
-    print("Бот запущен!")
-    updater.start_polling()
-    updater.idle()
+# Запуск рулетки с автоматической ставкой
+async def start_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    bet_amount = 20000
+    if user['balance'] < bet_amount:
+        await update.message.reply_text("Недостаточно снежинок для ставки.")
+        return
+    user['balance'] -= bet_amount
+    # Заранее выбранные числа
+    numbers = [2, 4, 6, 9, 14, 15, 17, 19, 20, 24, 25, 27, 29, 30, 33, 35]
+    current_roulette_bets[update.effective_user.id] = {
+        'amount': bet_amount,
+        'numbers': numbers
+    }
+    await update.message.reply_text(
+        f"Сделана ставка {bet_amount} снежинок на числа: {numbers}. Ждите вращения рулетки..."
+    )
+    # Вращение рулетки
+    await spin_roulette(update, context)
 
-if __name__ == '__main__':
-    main()
+# Вращение рулетки
+async def spin_roulette(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    number = random.randint(0, 36)
+    # Обработка ставок
+    for user_id, bet in current_roulette_bets.items():
+        user = get_user(user_id)
+        if number in bet['numbers']:
+            winnings = bet['amount'] * 35
+            user['balance'] += winnings
+            try:
+                await context.bot.send_message(user_id, f"Выпало число: {number}! Вы выиграли {winnings} снежинок! Баланс: {user['balance']}")
+            except:
+                pass
+        else:
+            try:
+                await context.bot.send_message(user_id, f"Выпало число: {number}. Вы проиграли ставку.")
+            except:
+                pass
+    # Очистка ставок
+    current_roulette_bets.clear()
+
+# Игра "Мины"
+async def start_mines(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
+    if user['balance'] < 5000:
+        await update.message.reply_text("Недостаточно снежинок для игры.")
+        return
+    user['balance'] -= 5000
+    mines = random.sample(range(1, 21), 3)  # 3 мины из 20
+    current_mines[update.effective_user.id] = mines
+    # Создаем клавиатуру для выбора
+    keyboard = []
+    for row in range(4):
+        buttons = []
+        for col in range(5):
+            num = row * 5 + col + 1
+            buttons.append(InlineKeyboardButton(str(num), callback_data=f"mine_{num}"))
+        keyboard.append(buttons)
+    await update.message.reply_text("Выберите ячейку, чтобы открыть:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# Обработка нажатий на мины
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = update.effective_user.id
+    user = get_user(user_id)
+    if user['banned']:
+        return
+    if data.startswith('mine_'):
+        cell = int(data.split('_')[1])
+        if user_id not in current_mines:
+            await query.edit_message_text("Игра мин не запущена.")
+            return
+        mines = current_mines[user_id]
+        if cell in mines:
+            user['balance'] -= 5000
+            await query.edit_message_text(f"Мина! Вы потеряли 5000 снежинок. Баланс: {user['balance']}")
+        else:
+            user['balance'] += 15000
+            await query.edit_message_text(f"Безопасно! Вы выиграли 15000 снежинок! Баланс: {user['balance']}")
+        del current_mines[user_id]
+
+# Обработка команд /roulette и /mine
+async def command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+    if "/roulette" in text:
+        await start_roulette(update, context)
+    elif "/mine" in text:
+        await start_mines(update, context)
+
+# Основная функция
+async def main():
+    application = ApplicationBuilder().token('YOUR_BOT_TOKEN').build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("balance", balance))
+    application.add_handler(CommandHandler("give", give))
+    application.add_handler(CommandHandler("ban", ban))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"\/(roulette|mine)"), command_handler))
+
+    await application.run_polling()
+
+import asyncio
+asyncio.run(main())
