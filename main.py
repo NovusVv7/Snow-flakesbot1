@@ -4,7 +4,7 @@ import asyncio
 import random
 import os
 
-API_TOKEN = os.getenv("7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc")
+API_TOKEN = os.getenv("API_TOKEN")
 ADMINS = [6359584002]
 BONUS_AMOUNT = 5000
 
