@@ -50,7 +50,8 @@ def get_user_id_from_username(username):
             return user_id
     return None
 
-@dp.message_handler(commands=["start"])
+# Обработка команды /start
+@dp.message_handler(lambda message: message.text.lower() == "старт")
 async def start(message: types.Message):
     user_id = str(message.from_user.id)
     username = message.from_user.username
@@ -67,6 +68,7 @@ async def start(message: types.Message):
         save_db(db)
     await message.answer(f"Добро пожаловать, у вас {db['users'][user_id]['snowflakes']} снежинок.")
 
+# Обработка команд: баланс или б
 @dp.message_handler(lambda message: message.text.lower() == "баланс" or message.text.lower() == "б")
 async def balance(message: types.Message):
     user_id = str(message.from_user.id)
@@ -78,6 +80,7 @@ async def balance(message: types.Message):
         return
     await message.answer(f"Ваш баланс: {db['users'][user_id]['snowflakes']} снежинок.")
 
+# Обработка команды передача или п
 @dp.message_handler(lambda message: message.text.lower().startswith("п ") or message.text.lower().startswith("передача"))
 async def pay(message: types.Message):
     user_id = str(message.from_user.id)
@@ -120,6 +123,7 @@ async def pay(message: types.Message):
     await message.reply(f"Вы передали {amount} снежинок пользователю {target}.")
     save_db(db)
 
+# Обработка команды рулетка или го
 @dp.message_handler(lambda message: message.text.lower().startswith("го") or message.text.lower().startswith("рулетка"))
 async def roulette(message: types.Message):
     user_id = str(message.from_user.id)
