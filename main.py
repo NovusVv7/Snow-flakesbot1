@@ -1,24 +1,43 @@
+import os
 import logging
 import json
-import os
 import random
 from aiogram import Bot, Dispatcher, executor, types
 
-TOKEN = os.getenv("API_TOKEN") or "your_token_here"
-bot = Bot(7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+# Get the API token from the environment variable
+TOKEN = os.getenv("API_TOKEN")
+if not TOKEN:
+    logging.error("API_TOKEN environment variable not set!")
+    exit(1) # Exit if the token is missing
+
+# Initialize the bot with the token from the environment
+bot = Bot(TOKEN)
 dp = Dispatcher(bot)
 
 DB_FILE = "db.json"
 
 def load_db():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
+    try:
+        if os.path.exists(DB_FILE):
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+    except FileNotFoundError:
+        logging.warning("Database file not found. Creating a new one.")
+        return {"users": {}, "banned": [], "history": {}}
+    except json.JSONDecodeError:
+        logging.error("Error decoding JSON from database file. Using default database.")
+        return {"users": {}, "banned": [], "history": {}}
     return {"users": {}, "banned": [], "history": {}}
 
 def save_db(db):
-    with open(DB_FILE, "w") as f:
-        json.dump(db, f, indent=4)
+    try:
+        with open(DB_FILE, "w") as f:
+            json.dump(db, f, indent=4)
+    except Exception as e:
+        logging.error(f"Error saving database: {e}")
 
 db = load_db()
 
@@ -84,5 +103,24 @@ async def pay(message: types.Message):
     save_db(db)
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    цены_на_снежинки = {
+    40: 300000,
+    85: 800000,
+    115: 2000000
+}
+
+def купить_снежинки(звёзды):
+    """
+    Позволяет пользователю купить снежинки за звёзды (с использованием словаря цен).
+    """
+    if звёзды in цены_на_снежинки:
+        return (цены_на_снежинки[звёзды], "Успешно куплено!")
+    elif звёзды < 0:
+        return (0, "Количество звезд должно быть положительным")
+    else:
+        return (0, "Неверное количество звёзд.")
+
+# Пример использования:
+снежинки, сообщение = купить_снежинки(85)
+print(сообщение)
     executor.start_polling(dp, skip_updates=True)
