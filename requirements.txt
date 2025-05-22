@@ -1,2 +1,2 @@
-pyTelegramBotAPI
-pyTelegramBotAPI==4.14.10
+pip install aiogram
+pip install aiosqlite
