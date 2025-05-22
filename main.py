@@ -4,8 +4,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import sqlite3
 from datetime import datetime, timedelta
 
-TOKEN = "ВАШ_ТОКЕН_БОТА"
-ADMIN_ID = ВАШ_ID_ТЕЛЕГРАМ
+TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
+ADMIN_ID = 6359584002
 GROUP_CHAT_ID = "ВАШ_ID_ЧАТА"
 
 conn = sqlite3.connect('users.db', check_same_thread=False)
