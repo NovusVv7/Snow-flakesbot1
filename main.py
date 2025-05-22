@@ -1,159 +1,235 @@
-import random
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
-import sqlite3
+import sqlite3, random, time
 
 API_TOKEN = '7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc'
-CREATOR_ID = 6359584002
+CREATOR_ID = 6359584002  # Замените на ваш Telegram ID
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
-# FSM состояния
+# Состояния FSM
 class GameState(StatesGroup):
-    waiting_for_go = State()
+    roulette_waiting = State()
+    mines_settings = State()
+    mines_playing = State()
 
-class MinesState(StatesGroup):
-    choosing_settings = State()
-    playing = State()
-
-# SQLite
+# Инициализация базы данных
 conn = sqlite3.connect("data.db")
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
-    snowflakes INTEGER DEFAULT 0
+    snowflakes INTEGER DEFAULT 0,
+    last_bonus INTEGER DEFAULT 0
 )
 """)
 conn.commit()
 
-# Баланс
+# Работа с балансом
+BONUS_INTERVAL = 5 * 60 * 60  # 5 часов
+
 def get_balance(user_id):
     cursor.execute("SELECT snowflakes FROM users WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
     return result[0] if result else 0
 
 def update_balance(user_id, amount):
-    if cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone():
+    cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+    if cursor.fetchone():
         cursor.execute("UPDATE users SET snowflakes = snowflakes + ? WHERE user_id = ?", (amount, user_id))
     else:
         cursor.execute("INSERT INTO users (user_id, snowflakes) VALUES (?, ?)", (user_id, amount))
     conn.commit()
 
-# /start
-@dp.message_handler(commands=["start"])
+def try_give_bonus(user_id):
+    now = int(time.time())
+    cursor.execute("SELECT last_bonus FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    last = result[0] if result else 0
+    
+    if now - last >= BONUS_INTERVAL:
+        bonus = random.randint(5000, 20000)
+        update_balance(user_id, bonus)
+        cursor.execute("UPDATE users SET last_bonus = ? WHERE user_id = ?", (now, user_id))
+        conn.commit()
+        return bonus
+    return None
+
+@dp.message_handler(commands=['start'])
 async def cmd_start(message: Message):
     update_balance(message.from_user.id, 5000)
-    await message.answer("Добро пожаловать! Напишите 'го' чтобы начать игру.")
-    await GameState.waiting_for_go.set()
+    await message.answer("Добро пожаловать! Напишите 'го' для начала или 'мины' для игры.")
 
-@dp.message_handler(lambda m: m.text.lower() == "го", state=GameState.waiting_for_go)
-async def start_game(message: Message, state: FSMContext):
-    await state.finish()
-    await message.answer("Выберите игру: \n1. Рулетка (в разработке)\n2. Снежные мины — напишите 'мины'")
+@dp.message_handler(lambda m: m.text.lower() == 'б')
+async def show_balance(message: Message):
+    bonus = try_give_bonus(message.from_user.id)
+    balance = get_balance(message.from_user.id)
+    if bonus:
+        await message.answer(f"Баланс: {balance} снежинок\nВы получили бонус: +{bonus}!")
+    else:
+        await message.answer(f"Баланс: {balance} снежинок\nБонус доступен раз в 5 часов.")
+
+@dp.message_handler(lambda m: m.text.lower() == "го")
+async def go_command(message: Message):
+    await GameState.roulette_waiting.set()
+    await message.answer("Режим рулетки активирован. Введите ставку (пример: 100 red)")
+
+@dp.message_handler(state=GameState.roulette_waiting)
+async def handle_roulette_bet(message: Message, state: FSMContext):
+    parts = message.text.lower().split()
+    if len(parts) < 2:
+        await message.reply("Пример ставки: 100 red")
+        return
     
-# Снежные мины
-@dp.message_handler(lambda m: m.text.lower() == "мины")
-async def mines_start(message: Message):
-    await message.answer("Введите ставку и количество мин (например: `100 5`):")
-    await MinesState.choosing_settings.set()
+    try:
+        amount = int(parts[0])
+        choice = parts[1]
+        
+        if get_balance(message.from_user.id) < amount:
+            await message.reply("Недостаточно снежинок.")
+            return
 
-@dp.message_handler(state=MinesState.choosing_settings)
-async def set_mines_game(message: Message, state: FSMContext):
+        win = False
+        result = random.choice(["red", "black"])
+        if choice == result:
+            win = True
+
+        if win:
+            update_balance(message.from_user.id, amount)
+            await message.reply(f"Выпало {result}. Вы выиграли! +{amount}")
+        else:
+            update_balance(message.from_user.id, -amount)
+            await message.reply(f"Выпало {result}. Вы проиграли. -{amount}")
+        await state.finish()
+    except:
+        await message.reply("Ошибка в ставке.")
+
+@dp.message_handler(lambda m: m.text.lower().startswith("передать "))
+async def transfer_currency(message: Message):
+    try:
+        parts = message.text.lower().split()
+        if len(parts) < 3:
+            await message.reply("Формат: передать [ID] [сумма]")
+            return
+        
+        recipient_id = int(parts[1])
+        amount = int(parts[2])
+        
+        if amount <= 0:
+            await message.reply("Сумма должна быть положительной!")
+            return
+            
+        sender_id = message.from_user.id
+        if sender_id == recipient_id:
+            await message.reply("Нельзя передавать себе!")
+            return
+            
+        if get_balance(sender_id) < amount:
+            await message.reply("Недостаточно снежинок для перевода.")
+            return
+            
+        update_balance(sender_id, -amount)
+        update_balance(recipient_id, amount)
+        await message.reply(f"Вы успешно передали {amount} снежинок пользователю {recipient_id}")
+    except Exception as e:
+        await message.reply(f"Ошибка перевода: {str(e)}")
+
+# Игра "Мины"
+@dp.message_handler(lambda m: m.text.lower() == "мины")
+async def mines_game(message: Message):
+    await GameState.mines_settings.set()
+    await message.answer("Настройки игры 'Мины':\n"
+                        "Введите ставку, количество клеток и мин через пробел\n"
+                        "Пример: 1000 25 5 (ставка 1000, поле 5x5, 5 мин)")
+
+@dp.message_handler(state=GameState.mines_settings)
+async def setup_mines_game(message: Message, state: FSMContext):
     try:
         parts = message.text.split()
-        bet, mines = int(parts[0]), int(parts[1])
-        balance = get_balance(message.from_user.id)
+        if len(parts) != 3:
+            await message.reply("Нужно 3 числа: ставка, клетки, мины")
+            return
+            
+        bet, cells, mines = map(int, parts)
+        if bet <= 0 or cells <= 0 or mines <= 0:
+            await message.reply("Все числа должны быть положительными!")
+            return
+            
+        if mines >= cells:
+            await message.reply("Количество мин должно быть меньше количества клеток!")
+            return
+            
+        if get_balance(message.from_user.id) < bet:
+            await message.reply("Недостаточно снежинок для ставки!")
+            return
+            
+        await state.update_data(bet=bet, cells=cells, mines=mines, opened=[])
+        await GameState.mines_playing.set()
+        await show_mines_field(message, state)
+    except:
+        await message.reply("Ошибка ввода. Используйте числа!")
 
-        if bet <= 0 or mines <= 0 or mines >= 25:
-            return await message.answer("Неверные данные. Мин должно быть от 1 до 24.")
-
-        if balance < bet:
-            return await message.answer("Недостаточно снежинок.")
-
-        # Генерация мин
-        mine_positions = random.sample(range(25), mines)
-        opened = []
-
-        await state.update_data(bet=bet, mines=mine_positions, opened=opened)
-        update_balance(message.from_user.id, -bet)
-        await message.answer("Поле 5x5 готово. Введите клетку (например: A1, B3):")
-        await MinesState.playing.set()
-
-    except Exception:
-        await message.answer("Ошибка ввода. Формат: ставка количество_мин")
-
-@dp.message_handler(state=MinesState.playing)
-async def mines_play(message: Message, state: FSMContext):
-    cell_map = {
-        "A": 0, "B": 1, "C": 2, "D": 3, "E": 4
-    }
-
+async def show_mines_field(message: Message, state: FSMContext):
     data = await state.get_data()
-    bet = data['bet']
-    mines = data['mines']
-    opened = data['opened']
+    cells = data['cells']
+    opened = data.get('opened', [])
+    
+    field = ""
+    for i in range(cells):
+        if i in opened:
+            field += "🟩 "
+        else:
+            field += "⬜ "
+        if (i + 1) % 5 == 0:
+            field += "\n"
+    
+    await message.answer(f"Поле ({cells} клеток, {data['mines']} мин):\n{field}\n"
+                        f"Выберите клетку (1-{cells})")
 
-    cell = message.text.upper()
-    if len(cell) < 2 or cell[0] not in cell_map or not cell[1:].isdigit():
-        return await message.answer("Неверная клетка. Пример: B3")
-
-    row = cell_map[cell[0]]
-    col = int(cell[1:]) - 1
-    if not (0 <= col < 5):
-        return await message.answer("Номер должен быть от 1 до 5.")
-
-    index = row * 5 + col
-    if index in opened:
-        return await message.answer("Эта клетка уже открыта!")
-
-    if index in mines:
-        await message.answer("Бум! Вы попали на мину. Игра окончена.")
-        await state.finish()
-    else:
-        opened.append(index)
+@dp.message_handler(state=GameState.mines_playing)
+async def process_mines_move(message: Message, state: FSMContext):
+    try:
+        cell = int(message.text) - 1
+        data = await state.get_data()
+        
+        if cell < 0 or cell >= data['cells']:
+            await message.reply("Неверный номер клетки!")
+            return
+            
+        if cell in data.get('opened', []):
+            await message.reply("Эта клетка уже открыта!")
+            return
+            
+        # Генерация мин при первом ходе
+        if 'mines_positions' not in data:
+            mines_positions = random.sample(range(data['cells']), data['mines'])
+            await state.update_data(mines_positions=mines_positions)
+        else:
+            mines_positions = data['mines_positions']
+        
+        opened = data.get('opened', [])
+        opened.append(cell)
         await state.update_data(opened=opened)
-        reward = bet // 5
-        update_balance(message.from_user.id, reward)
-        await message.answer(f"Безопасно! Вы получили {reward} снежинок. Введите следующую клетку:")
-
-        if len(opened) == 25 - len(mines):
-            await message.answer("Вы выиграли! Все безопасные клетки открыты.")
+        
+        if cell in mines_positions:
+            update_balance(message.from_user.id, -data['bet'])
+            await message.answer("💥 Вы наткнулись на мину и проиграли!")
             await state.finish()
-
-# Создатель: передача снежинок
-@dp.message_handler(lambda msg: msg.text.startswith("П "))
-async def give_currency(msg: Message):
-    if msg.from_user.id != CREATOR_ID:
-        return await msg.reply("Недостаточно прав.")
-    try:
-        amount = int(msg.text.split()[1])
-        receiver_id = msg.reply_to_message.from_user.id if msg.reply_to_message else None
-        if not receiver_id:
-            return await msg.reply("Ответьте на сообщение пользователя.")
-        update_balance(receiver_id, amount)
-        await msg.answer(f"Передано {amount} снежинок.")
-    except Exception as e:
-        await msg.reply(f"Ошибка: {e}")
-
-# Выдать / забрать снежинки
-@dp.message_handler(lambda msg: msg.text.startswith("выдать") or msg.text.startswith("забрать"))
-async def manage_balance(msg: Message):
-    if msg.from_user.id != CREATOR_ID:
-        return await msg.reply("Недостаточно прав.")
-    try:
-        parts = msg.text.split()
-        cmd, amount = parts[0], int(parts[1])
-        target_id = msg.reply_to_message.from_user.id if msg.reply_to_message else msg.from_user.id
-        update_balance(target_id, amount if cmd == "выдать" else -amount)
-        await msg.answer(f"{cmd.capitalize()} {abs(amount)} снежинок.")
-    except Exception as e:
-        await msg.reply(f"Ошибка: {e}")
+        else:
+            if len(opened) == data['cells'] - data['mines']:
+                win_amount = data['bet'] * 2
+                update_balance(message.from_user.id, win_amount)
+                await message.answer(f"🎉 Вы открыли все безопасные клетки и выиграли {win_amount}!")
+                await state.finish()
+            else:
+                await show_mines_field(message, state)
+    except:
+        await message.reply("Ошибка ввода. Введите номер клетки!")
 
 if __name__ == '__main__':
     executor.start_polling(dp, skip_updates=True)
