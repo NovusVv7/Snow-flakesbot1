@@ -3,7 +3,7 @@ import sqlite3
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-API_TOKEN = 'YOUR_BOT_TOKEN'  # <-- вставь сюда свой токен
+API_TOKEN = '7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc'  # <-- вставь сюда свой токен
 ADMINS = [123456789]          # <-- сюда свой user_id
 
 bot = Bot(token=API_TOKEN)
