@@ -1,6 +1,6 @@
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 import sqlite3
 import random
 import config
@@ -20,7 +20,7 @@ conn.commit()
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Команды администратора
+# Константы
 CREATOR_ID = config.CREATOR_ID
 active_bets = {}
 PAYOUTS = {
@@ -75,7 +75,198 @@ def balance(update: Update, context: CallbackContext):
         logging.error(f"Balance error: {str(e)}")
         update.message.reply_text("❌ Ошибка получения баланса")
 
-# ... (остальные функции остаются без изменений из предыдущего кода) ...
+def transfer(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    args = update.message.text.split()[1:]
+
+    if len(args) != 2 or not args[1].isdigit():
+        update.message.reply_text("❌ Формат: Передать @юзер сумма")
+        return
+
+    recipient_username = args[0].lstrip('@')
+    amount = int(args[1])
+
+    if amount <= 0:
+        update.message.reply_text("❌ Сумма должна быть положительной")
+        return
+
+    try:
+        with db_transaction():
+            sender = cursor.execute("SELECT snowflakes, banned FROM users WHERE user_id=?", (user_id,)).fetchone()
+            if not sender:
+                update.message.reply_text("❌ Вы не зарегистрированы")
+                return
+            if sender[1]:
+                update.message.reply_text("⛔ Вы забанены!")
+                return
+            if sender[0] < amount:
+                update.message.reply_text("❌ Недостаточно снежинок")
+                return
+
+            recipient = cursor.execute("SELECT user_id FROM users WHERE username=?", (recipient_username,)).fetchone()
+            if not recipient:
+                update.message.reply_text("❌ Пользователь не найден")
+                return
+
+            cursor.execute("UPDATE users SET snowflakes = snowflakes - ? WHERE user_id=?", (amount, user_id))
+            cursor.execute("UPDATE users SET snowflakes = snowflakes + ? WHERE user_id=?", (amount, recipient[0]))
+            update.message.reply_text(f"✅ Успешно передано {amount} снежинок пользователю @{recipient_username}")
+
+    except Exception as e:
+        logging.error(f"Transfer error: {str(e)}")
+        update.message.reply_text("❌ Ошибка при переводе средств")
+
+def roulette(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    args = update.message.text.split()[1:]
+
+    if not args:
+        update.message.reply_text("❌ Формат: Рулетка [ставка] числа через пробел\nПример: Рулетка 20000 2 4 6 9 14...")
+        return
+
+    try:
+        bet = int(args[0])
+        if bet < 10:
+            update.message.reply_text("❌ Минимальная ставка: 10 снежинок")
+            return
+    except ValueError:
+        update.message.reply_text("❌ Неверная сумма ставки")
+        return
+
+    numbers = []
+    for item in args[1:]:
+        if item.isdigit():
+            num = int(item)
+            if 0 <= num <= 36:
+                numbers.append(num)
+            else:
+                update.message.reply_text(f"❌ Некорректное число: {item}")
+                return
+        else:
+            update.message.reply_text(f"❌ Некорректный формат: {item}")
+            return
+
+    if not numbers:
+        update.message.reply_text("❌ Укажите числа для ставки")
+        return
+
+    active_bets[user_id] = {
+        'bet': bet,
+        'numbers': numbers,
+        'payout': 35 // len(numbers)
+    }
+
+    update.message.reply_text(
+        f"❄️ Ставка {bet} снежинок на числа: {', '.join(map(str, numbers))}\n"
+        f"Коэффициент: x{active_bets[user_id]['payout']}\n"
+        "Напишите 'ГО' чтобы запустить рулетку или 'ОТМЕНА' для отмены"
+    )
+
+def start_roulette(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if user_id not in active_bets:
+        update.message.reply_text("❌ Нет активных ставок")
+        return
+
+    bet_data = active_bets.pop(user_id)
+
+    try:
+        with db_transaction():
+            user = cursor.execute("SELECT snowflakes, banned FROM users WHERE user_id=?", (user_id,)).fetchone()
+            if not user:
+                update.message.reply_text("❌ Вы не зарегистрированы")
+                return
+            if user[1]:
+                update.message.reply_text("⛔ Вы забанены!")
+                return
+            if user[0] < bet_data['bet']:
+                update.message.reply_text("❌ Недостаточно снежинок")
+                return
+
+            cursor.execute("UPDATE users SET snowflakes = snowflakes - ? WHERE user_id=?", (bet_data['bet'], user_id))
+            
+            result = random.randint(0, 36)
+            red_numbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
+            color = 'красное' if result in red_numbers else 'черное' if result !=0 else 'зеленое'
+
+            if result in bet_data['numbers']:
+                win_amount = bet_data['bet'] * bet_data['payout']
+                cursor.execute("UPDATE users SET snowflakes = snowflakes + ? WHERE user_id=?", (win_amount, user_id))
+                message = (
+                    f"🎉 ВЫИГРЫШ!\n"
+                    f"Выпало: {result} ({color})\n"
+                    f"💰 +{win_amount} снежинок!"
+                )
+            else:
+                message = (
+                    f"💔 ПРОИГРЫШ\n"
+                    f"Выпало: {result} ({color})\n"
+                    f"❄️ -{bet_data['bet']} снежинок"
+                )
+
+            update.message.reply_text(message)
+
+    except Exception as e:
+        logging.error(f"Roulette error: {str(e)}")
+        update.message.reply_text("❌ Ошибка в игре")
+
+def cancel_bet(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    if user_id in active_bets:
+        del active_bets[user_id]
+        update.message.reply_text("❄️ Ставка отменена!")
+    else:
+        update.message.reply_text("❌ Нет активных ставок")
+
+def add_snowflakes(update: Update, context: CallbackContext):
+    if update.effective_user.id != CREATOR_ID:
+        update.message.reply_text("❌ У вас нет прав на эту команду.")
+        return
+
+    args = context.args
+    if len(args) < 2:
+        update.message.reply_text("❌ Формат: /add_snowflakes @username количество")
+        return
+
+    username = args[0].lstrip('@')
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            update.message.reply_text("❌ Количество должно быть положительным числом.")
+            return
+    except ValueError:
+        update.message.reply_text("❌ Неверное количество снежинок.")
+        return
+
+    try:
+        with db_transaction():
+            user = cursor.execute(
+                "SELECT user_id FROM users WHERE username=?", 
+                (username,)
+            ).fetchone()
+            
+            if not user:
+                update.message.reply_text("❌ Пользователь не найден.")
+                return
+
+            cursor.execute(
+                "UPDATE users SET snowflakes = snowflakes + ? WHERE user_id=?",
+                (amount, user[0])
+            )
+
+            update.message.reply_text(f"✅ Успешно выдано {amount} снежинок пользователю @{username}.")
+            
+            try:
+                context.bot.send_message(
+                    chat_id=user[0], 
+                    text=f"🎁 Вам было начислено {amount} снежинок!"
+                )
+            except Exception as e:
+                logging.error(f"Ошибка уведомления: {e}")
+
+    except Exception as e:
+        logging.error(f"Ошибка выдачи: {e}")
+        update.message.reply_text("❌ Ошибка выполнения команды.")
 
 def main():
     updater = Updater(config.TOKEN, use_context=True)
