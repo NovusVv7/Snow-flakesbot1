@@ -2,14 +2,13 @@
 import json
 import os
 import random
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
+from telegram import Update
+from telegram.ext import Updater, Filters, MessageHandler, CallbackContext, CommandHandler
 
-TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"  # замените на ваш токен
-ADMINS = ['6359584002']  # список ID админов как строки
+TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"  # вставьте свой токен
+ADMINS = ['6359584002']
 DATA_FILE = "data.json"
 
-# Инициализация данных
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
@@ -23,11 +22,10 @@ def load_data():
 
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f)
 
 data = load_data()
 
-# Обработка сообщений
 def handle_message(update: Update, context: CallbackContext):
     global data
     user_id = str(update.effective_user.id)
@@ -35,34 +33,29 @@ def handle_message(update: Update, context: CallbackContext):
 
     # Регистрация нового пользователя
     if user_id not in data["user_balance"]:
-        data["user_balance"][user_id] = 10000  # стартовые снежинки
+        data["user_balance"][user_id] = 10000
         data["total_players"] += 1
         save_data(data)
 
-    # Проверка заблокированных
     if user_id in data["banned_users"]:
         update.message.reply_text("🚫 Вы заблокированы!")
         return
 
-    # Баланс команда
     if text in ['б', '/баланс', 'баланс']:
         balance = data["user_balance"].get(user_id, 0)
         update.message.reply_text(f"❄️ Твой баланс: {balance} снежинок❄️")
         return
 
-    # Запуск рулетки
     if text == 'го':
         start_roulette(update, context, user_id)
         return
 
-    # Обработка ставок
     handle_bet_message(update, context, user_id, text)
 
-# Обработка ставок
-def handle_bet_message(update: Update, context: CallbackContext, user_id, text):
+def handle_bet_message(update, context, user_id, text):
     global data
     if user_id in data["user_bets"]:
-        update.message.reply_text("❗ У вас уже есть активная ставка. Подождите результата.")
+        update.message.reply_text("❗ У вас уже есть активная ставка.")
         return
 
     try:
@@ -79,9 +72,6 @@ def handle_bet_message(update: Update, context: CallbackContext, user_id, text):
             return
 
         # Анализ ставки
-        bet_type = None
-        bet_value = None
-
         if '-' in bet_input:
             start_end = bet_input.split('-')
             start, end = int(start_end[0]), int(start_end[1])
@@ -92,16 +82,16 @@ def handle_bet_message(update: Update, context: CallbackContext, user_id, text):
             bet_value = {'start': start, 'end': end}
         elif bet_input in ['красный', 'red']:
             bet_type = 'color'
-            bet_value = 'red'
+            bet_value = 'красный'
         elif bet_input in ['черный', 'black']:
             bet_type = 'color'
-            bet_value = 'black'
+            bet_value = 'черный'
         elif bet_input in ['нечет', 'нечет', 'odd']:
             bet_type = 'parity'
-            bet_value = 'odd'
+            bet_value = 'нечет'
         elif bet_input in ['чет', 'even']:
             bet_type = 'parity'
-            bet_value = 'even'
+            bet_value = 'чет'
         elif all(c.isdigit() or c == ' ' for c in bet_input):
             nums = list(set(int(n) for n in bet_input.split() if n.isdigit()))
             if all(0 <= n <= 36 for n in nums):
@@ -133,11 +123,11 @@ def handle_bet_message(update: Update, context: CallbackContext, user_id, text):
 
         # Запускаем рулетку
         run_roulette(update, context, user_id)
-    except:
+    except Exception as e:
+        print(f"Ошибка: {e}")
         update.message.reply_text("❌ Ошибка обработки ставки.")
 
-# Запуск рулетки и подсчет результата
-def run_roulette(update: Update, context: CallbackContext, user_id):
+def start_roulette(update, context, user_id):
     global data
     result_number = random.randint(0,36)
     red_numbers = [1,3,5,7,9,12,14,16,19,21,23,25,27,30,32,34,36]
@@ -152,14 +142,13 @@ def run_roulette(update: Update, context: CallbackContext, user_id):
     balance = bet['balance']
     win = False
     payout = 0
-    msg = ""
 
     # Проверка выигрыша
     if bet['type'] == 'range':
-        start, end = bet['value']['start'], bet['value']['end']
-        if start <= result_number <= end:
+        s, e = bet['value']['start'], bet['value']['end']
+        if s <= result_number <= e:
             win = True
-            payout = amount * (36 / (end - start + 1))
+            payout = amount * (36 / (e - s + 1))
     elif bet['type'] == 'color':
         if bet['value'] == color:
             win = True
@@ -177,22 +166,82 @@ def run_roulette(update: Update, context: CallbackContext, user_id):
             win = True
             payout = amount * 36
 
-    # Обновление баланса
     if win:
-        data["user_balance"][user_id] = int(balance + payout)
-        msg = f"🔥❄️ Выпало число: *{result_number}* ({color}, {parity})\nВы выиграли! +{int(payout)} снежинок❄️"
+        new_balance = int(balance + payout)
+        data["user_balance"][user_id] = new_balance
+        msg = f"🔥❄️ Выпало число: *{result_number}* ({color}, {parity})\n🎉 Вы выиграли! +{int(payout)} снежинок❄️"
     else:
-        data["user_balance"][user_id] = int(balance - amount)
-        msg = f"🎲 Выпало число: *{result_number}* ({color}, {parity})\nВы проиграли {amount} снежинок❄️"
+        new_balance = int(balance - amount)
+        data["user_balance"][user_id] = new_balance
+        msg = f"🎲 Выпало число: *{result_number}* ({color}, {parity})\n❌ Вы проиграли {amount} снежинок❄️"
 
-    # Удаляем ставку
     del data["user_bets"][user_id]
     save_data(data)
-
-    # Отправляем результат
     context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
 
-# Основной запуск
+def handle_command(update, context):
+    global data
+    user_id = str(update.effective_user.id)
+    parts = update.message.text.split()
+    cmd = parts[0]
+
+    if user_id not in ADMINS:
+        return
+
+    if cmd == '/выдать':
+        try:
+            target_id = parts[1]
+            amount = int(parts[2])
+            data["user_balance"][target_id] = data["user_balance"].get(target_id, 0) + amount
+            update.message.reply_text(f"✅ Выдано {amount} снежинок пользователю {target_id}")
+        except:
+            update.message.reply_text("❌ Формат: /выдать [user_id] [amount]")
+        save_data(data)
+
+    elif cmd == '/забрать':
+        try:
+            target_id = parts[1]
+            amount = int(parts[2])
+            if data["user_balance"].get(target_id, 0) < amount:
+                update.message.reply_text("❌ У пользователя недостаточно средств")
+                return
+            data["user_balance"][target_id] -= amount
+            update.message.reply_text(f"✅ Забрано {amount} снежинок у пользователя {target_id}")
+        except:
+            update.message.reply_text("❌ Формат: /забрать [user_id] [amount]")
+        save_data(data)
+
+    elif cmd == '/бан':
+        try:
+            target_id = parts[1]
+            if target_id not in data["banned_users"]:
+                data["banned_users"].append(target_id)
+                update.message.reply_text(f"✅ Пользователь {target_id} заблокирован")
+            else:
+                update.message.reply_text("ℹ️ Пользователь уже заблокирован")
+        except:
+            update.message.reply_text("❌ Формат: /бан [user_id]")
+        save_data(data)
+
+    elif cmd == '/разбан':
+        try:
+            target_id = parts[1]
+            if target_id in data["banned_users"]:
+                data["banned_users"].remove(target_id)
+                update.message.reply_text(f"✅ Пользователь {target_id} разблокирован")
+            else:
+                update.message.reply_text("ℹ️ Пользователь не заблокирован")
+        except:
+            update.message.reply_text("❌ Формат: /разбан [user_id]")
+        save_data(data)
+
+    elif cmd == '/топ':
+        top_list = sorted(data["user_balance"].items(), key=lambda x: x[1], reverse=True)[:10]
+        msg = "🔥 Топ игроков:\n"
+        for i, (uid, bal) in enumerate(top_list, 1):
+            msg += f"{i}. Пользователь {uid}: {bal} снежинок❄️\n"
+        update.message.reply_text(msg)
+
 def main():
     updater = Updater(TOKEN)
     dp = updater.dispatcher
