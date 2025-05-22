@@ -58,6 +58,11 @@ async def roulette(message: types.Message):
     if user_id in db["banned"]:
         await message.answer("Вы забанены.")
         return
+
+    if user_id not in db["users"]:
+        await message.answer("Сначала используйте команду /start")
+        return
+
     text = message.text.lower().split()
     if len(text) != 3:
         await message.reply("Пример: го odd 100")
@@ -91,15 +96,24 @@ async def pay(message: types.Message):
     if len(parts) != 3 or not parts[2].isdigit():
         await message.reply("Используй: П [ID] [сумма]")
         return
+
+    if user_id not in db["users"]:
+        await message.reply("Сначала используйте команду /start")
+        return
+
     target, amount = parts[1], int(parts[2])
-    if user_id not in db["users"] or db["users"][user_id]["snowflakes"] < amount:
+
+    if db["users"][user_id]["snowflakes"] < amount:
         await message.reply("Недостаточно снежинок.")
         return
+
     db["users"][user_id]["snowflakes"] -= amount
+
     if target not in db["users"]:
-        db["users"][target] = {"snowflakes": 1000}
+        db["users"][target] = {"snowflakes": 1000}  #Инициализируем пользователя
     db["users"][target]["snowflakes"] += amount
     await message.reply(f"Вы передали {amount} снежинок пользователю {target}.")
     save_db(db)
 
 if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
