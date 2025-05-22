@@ -4,8 +4,7 @@ from telegram.ext import Updater, MessageHandler, Filters, CallbackContext
 import random
 import os
 
-# Конфигурация
-TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
+
 ADMINS = [6359584002]  # ID администраторов
 DATA_FILE = "data.json"
 
