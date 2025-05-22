@@ -1,222 +1,167 @@
-import json
-import random
+import logging
+from aiogram import Bot, Dispatcher, executor, types
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
-from aiogram.utils import executor
+import random
 import os
 
-API_TOKEN = os.getenv("API_TOKEN")
+API_TOKEN = os.getenv("7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc")
+ADMINS = [6359584002]
+BONUS_AMOUNT = 5000
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-DB_FILE = "db.json"
-ADMINS = [123456789]  # ЗАМЕНИ на свой Telegram user ID
+users = {}
+banned_users = set()
+roulette_bets = {}
 
-def load_db():
+roulette_gif_url = "https://media.tenor.com/TuY5z2GbPOgAAAAC/roulette-casino.gif"
+
+def is_admin(user_id):
+    return user_id in ADMINS
+
+@dp.message_handler(commands=['start'])
+async def start(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in banned_users:
+        return await message.answer("Вы забанены.")
+    if user_id not in users:
+        users[user_id] = {
+            'balance': BONUS_AMOUNT,
+            'name': message.from_user.first_name,
+            'id': user_id
+        }
+        await message.answer(f"Добро пожаловать, {message.from_user.first_name}! Вам начислено {BONUS_AMOUNT} снежинок!")
+    else:
+        await message.answer("Вы уже зарегистрированы.")
+
+@dp.message_handler(lambda message: message.text.lower().startswith("профиль"))
+async def profile(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in users:
+        return await message.answer("Сначала напишите /start")
+    user = users[user_id]
+    await message.answer(f"Профиль:
+Имя: {user['name']}
+ID: {user['id']}
+Баланс: {user['balance']} снежинок")
+
+@dp.message_handler(lambda message: message.text.lower() == "б")
+async def balance(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in users:
+        return await message.answer("Сначала напишите /start")
+    await message.answer(f"Ваш баланс: {users[user_id]['balance']} снежинок")
+
+@dp.message_handler(lambda message: message.text.lower().startswith("п "))
+async def transfer(message: types.Message):
     try:
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
+        _, target_id, amount = message.text.split()
+        user_id = message.from_user.id
+        target_id = int(target_id)
+        amount = int(amount)
+        if user_id not in users or target_id not in users:
+            return await message.answer("Один из пользователей не найден.")
+        if users[user_id]['balance'] < amount:
+            return await message.answer("Недостаточно средств.")
+        users[user_id]['balance'] -= amount
+        users[target_id]['balance'] += amount
+        await message.answer(f"Вы перевели {amount} снежинок пользователю {target_id}.")
+    except:
+        await message.answer("Используй формат: п [id] [сумма]")
 
-def save_db(db):
-    with open(DB_FILE, "w") as f:
-        json.dump(db, f)
-
-def get_user(user_id):
-    db = load_db()
-    return db.get(str(user_id), {"balance": 1000, "banned": False, "history": []})
-
-def update_user(user_id, user_data):
-    db = load_db()
-    db[str(user_id)] = user_data
-    save_db(db)
-
-def change_balance(user_id, amount, action=""):
-    user = get_user(user_id)
-    user["balance"] += amount
-    user["history"].append(f"{'+' if amount >= 0 else ''}{amount} ({action})")
-    update_user(user_id, user)
-
-def is_banned(user_id):
-    return get_user(user_id).get("banned", False)
-
-@dp.message_handler(lambda m: m.text.lower() == "б")
-async def check_balance(message: Message):
-    if is_banned(message.from_user.id):
-        await message.reply("Вы забанены.")
+@dp.message_handler(commands=['выдать'])
+async def give_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
         return
-    bal = get_user(message.from_user.id)["balance"]
-    await message.reply(f"У вас {bal} снежинок.")
+    try:
+        _, target_id, amount = message.text.split()
+        users[int(target_id)]['balance'] += int(amount)
+        await message.answer("Снежинки выданы.")
+    except:
+        await message.answer("Ошибка выдачи.")
 
-# Админ-команды
-@dp.message_handler(commands=["выдать", "отнять", "забанить", "история", "перевод"])
-async def admin_commands(message: Message):
-    if message.from_user.id not in ADMINS:
+@dp.message_handler(commands=['забрать'])
+async def take_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
         return
+    try:
+        _, target_id, amount = message.text.split()
+        users[int(target_id)]['balance'] -= int(amount)
+        await message.answer("Снежинки забраны.")
+    except:
+        await message.answer("Ошибка изъятия.")
 
-    parts = message.text.split()
-    if message.text.startswith("/выдать") and len(parts) == 3:
-        uid, amount = int(parts[1]), int(parts[2])
-        change_balance(uid, amount, "выдача")
-        await message.reply("Выдано.")
-    elif message.text.startswith("/отнять") and len(parts) == 3:
-        uid, amount = int(parts[1]), int(parts[2])
-        change_balance(uid, -amount, "отнятие")
-        await message.reply("Отнято.")
-    elif message.text.startswith("/забанить") and len(parts) == 2:
-        uid = int(parts[1])
-        user = get_user(uid)
-        user["banned"] = True
-        update_user(uid, user)
-        await message.reply("Забанен.")
-    elif message.text.startswith("/история") and len(parts) == 2:
-        uid = int(parts[1])
-        history = get_user(uid).get("history", [])
-        await message.reply("\n".join(history[-10:]) or "История пуста.")
-    elif message.text.startswith("/перевод") and len(parts) == 3:
-        to_id, amount = int(parts[1]), int(parts[2])
-        from_id = message.from_user.id
-        if get_user(from_id)["balance"] < amount:
-            await message.reply("Недостаточно снежинок.")
-            return
-        change_balance(from_id, -amount, "перевод")
-        change_balance(to_id, amount, "получено")
-        await message.reply("Перевод выполнен.")
+@dp.message_handler(commands=['забанить'])
+async def ban_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        _, target_id = message.text.split()
+        banned_users.add(int(target_id))
+        await message.answer("Пользователь забанен.")
+    except:
+        await message.answer("Ошибка блокировки.")
 
-# Рулетка
-pending_bets = {}
+@dp.message_handler(lambda message: message.text.lower().startswith("мины "))
+async def mines_start(message: types.Message):
+    try:
+        _, bet = message.text.split()
+        bet = int(bet)
+        user_id = message.from_user.id
+        if users[user_id]['balance'] < bet:
+            return await message.answer("Недостаточно средств.")
+        users[user_id]['balance'] -= bet
+        await message.answer("Игра «Мины» началась! Напиши: м x y (например: м 1 2)")
+    except:
+        await message.answer("Формат: мины [ставка]")
+
+@dp.message_handler(lambda message: message.text.lower().startswith("м "))
+async def mines_click(message: types.Message):
+    await message.answer("Вы кликнули по мине! (Функция в разработке: будет поле, коэффициент до 60 и кнопка 'забрать')")
+
+@dp.message_handler(lambda message: message.text.lower().startswith("го"))
+async def go_roulette(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in roulette_bets or not roulette_bets[user_id]:
+        return await message.answer("Ставок нет.")
+    await message.answer_animation(roulette_gif_url, caption="Запуск рулетки...")
+    await asyncio.sleep(5)
+    number = random.randint(0, 36)
+    color = 'red' if number % 2 == 0 else 'black'
+    result_text = f"Выпало число {number} ({color})"
+    total_win = 0
+    for bet in roulette_bets[user_id]:
+        amount, bets = bet
+        if str(number) in bets:
+            total_win += amount * 36 // len(bets)
+    if total_win > 0:
+        users[user_id]['balance'] += total_win
+        result_text += f"
+Вы выиграли: {total_win} снежинок!"
+    else:
+        result_text += "
+Вы проиграли."
+    roulette_bets[user_id] = []
+    await message.answer(result_text)
 
 @dp.message_handler()
-async def all_text_handler(message: Message):
-    user_id = message.from_user.id
-    if is_banned(user_id):
-        await message.reply("Вы забанены.")
-        return
-
-    text = message.text.lower().strip()
-    parts = text.split()
-
-    # Ставка на рулетку
-    if len(parts) == 2 and parts[0].isdigit() and (parts[1].isdigit() or parts[1] in ["odd", "even"]):
-        amount = int(parts[0])
-        bet = parts[1]
-        bal = get_user(user_id)["balance"]
-        if amount > bal:
-            await message.reply("Недостаточно снежинок.")
-            return
-        pending_bets[user_id] = {"amount": amount, "bet": bet}
-        await message.reply(f"Ставка {amount} на {bet} принята. Запуск через 5 секунд...")
-        await asyncio.sleep(5)
-        await roulette_spin(user_id, message)
-        return
-
-    # Команды для мин
-    if text.startswith("м "):
-        await mines_click(message)
-    elif text == "забрать":
-        await mines_cashout(message)
-
-# Рулетка обработка
-async def roulette_spin(user_id, message):
-    data = pending_bets.pop(user_id, None)
-    if not data:
-        return
-    number = random.randint(0, 36)
-    amount = data["amount"]
-    bet = data["bet"]
-    win = False
-    if bet == "odd" and number % 2 == 1:
-        win = True
-        payout = amount * 2
-    elif bet == "even" and number % 2 == 0 and number != 0:
-        win = True
-        payout = amount * 2
-    elif bet.isdigit() and int(bet) == number:
-        win = True
-        payout = amount * 36
-    else:
-        payout = 0
-
-    if win:
-        change_balance(user_id, payout, "рулетка +")
-        result = f"Выпало {number}. Победа! +{payout} снежинок."
-    else:
-        change_balance(user_id, -amount, "рулетка -")
-        result = f"Выпало {number}. Проигрыш. -{amount} снежинок."
-    await message.reply(result)
-
-# Мины
-active_mines = {}  # user_id: {"grid": [...], "revealed": set(), "amount": int}
-
-def generate_mines_grid(size=5, mines=5):
-    grid = [["⬜" for _ in range(size)] for _ in range(size)]
-    positions = random.sample(range(size*size), mines)
-    for pos in positions:
-        x, y = divmod(pos, size)
-        grid[x][y] = "💣"
-    return grid
-
-def render_grid(grid, revealed):
-    text = ""
-    for i, row in enumerate(grid):
-        for j, cell in enumerate(row):
-            text += cell if (i, j) in revealed or cell == "💣" else "▪️"
-        text += "\n"
-    return text
-
-@dp.message_handler(commands=["мины"])
-async def start_mines(message: Message):
-    user_id = message.from_user.id
-    if is_banned(user_id):
-        await message.reply("Вы забанены.")
-        return
-    bal = get_user(user_id)["balance"]
-    if bal < 100:
-        await message.reply("Нужно минимум 100 снежинок.")
-        return
-    grid = generate_mines_grid()
-    active_mines[user_id] = {"grid": grid, "revealed": set(), "amount": 100}
-    change_balance(user_id, -100, "ставка в мины")
-    await message.reply("Игра началась! Введите `м 1 2` чтобы открыть клетку.\n" + render_grid(grid, set()))
-
-async def mines_click(message: Message):
-    user_id = message.from_user.id
-    if user_id not in active_mines:
-        await message.reply("Игра не начата. Напишите /мины.")
-        return
+async def handle_bets(message: types.Message):
     try:
-        _, x, y = message.text.split()
-        x, y = int(x), int(y)
+        parts = message.text.split()
+        amount = int(parts[0])
+        numbers = parts[1:]
+        user_id = message.from_user.id
+        if user_id not in users or users[user_id]['balance'] < amount:
+            return await message.answer("Недостаточно баланса или вы не зарегистрированы.")
+        users[user_id]['balance'] -= amount
+        if user_id not in roulette_bets:
+            roulette_bets[user_id] = []
+        roulette_bets[user_id].append((amount, numbers))
+        await message.answer(f"Ставка принята: {amount} на {', '.join(numbers)}. Напиши 'Го' для запуска.")
     except:
-        await message.reply("Формат: м x y")
-        return
+        await message.answer("Формат ставки: [сумма] [числа через пробел]")
 
-    data = active_mines[user_id]
-    grid = data["grid"]
-    revealed = data["revealed"]
-    if (x, y) in revealed:
-        await message.reply("Клетка уже открыта.")
-        return
-
-    revealed.add((x, y))
-    if grid[x][y] == "💣":
-        await message.reply("Бум! Вы подорвались.\n" + render_grid(grid, revealed))
-        del active_mines[user_id]
-    else:
-        await message.reply("Успешно!\n" + render_grid(grid, revealed))
-
-async def mines_cashout(message: Message):
-    user_id = message.from_user.id
-    if user_id not in active_mines:
-        await message.reply("У вас нет активной игры.")
-        return
-    data = active_mines.pop(user_id)
-    safe_cells = len(data["revealed"])
-    winnings = int(data["amount"] * (1 + safe_cells * 0.42))
-    change_balance(user_id, winnings, "выигрыш мины")
-    await message.reply(f"Вы забрали {winnings} снежинок за {safe_cells} безопасных клеток.")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     executor.start_polling(dp, skip_updates=True)
