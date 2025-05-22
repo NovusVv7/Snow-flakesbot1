@@ -56,26 +56,29 @@ if win > 0:
     new_balance = await get_user_balance(user_id)
     await update_user_balance(user_id, new_balance + win)
 
-cursor.execute("INSERT INTO bets (user_id, bet_text
+cursor.execute("INSERT INTO bets (user_id, bet_text, amount, result, win) VALUES (?, ?, ?, ?, ?)",
+               (user_id, " ".join(bet_inputs), amount, result, win))
+conn.commit()
 
-@dp.callback_query_handler(lambda c: c.data == "give_snow")
-async def handle_give_snow(callback_query: types.CallbackQuery):
-    await callback_query.message.edit_text("Напиши в формате:\n`выдать <user_id> <сумма>`")
+return True, result, win
 
-@dp.message_handler(lambda msg: msg.text.lower().startswith("выдать"))
-async def give_snow(message: types.Message):
-    if not is_admin(message.from_user.id):
-        return
+========== ХЭНДЛЕРЫ ==========
 
-    parts = message.text.split()
-    if len(parts) != 3:
-        return await message.reply("Формат: выдать <user_id> <сумма>")
+@dp.message_handler(commands=['start']) async def start_cmd(message: types.Message): user_id = message.from_user.id username = message.from_user.username cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username)) conn.commit() await message.reply("Добро пожаловать! Для просмотра баланса напишите 'Б'.")
 
-    user_id, amount = int(parts[1]), int(parts[2])
-    balance = await get_user_balance(user_id)
-    await update_user_balance(user_id, balance + amount)
-    await message.reply(f"Выдано {amount} снежинок пользователю {user_id}")
-ADMINS = [123456789]  # user_id админа
+@dp.message_handler(lambda msg: msg.text.lower() == "б") async def show_balance(message: types.Message): balance = await get_user_balance(message.from_user.id) await message.reply(f"Ваш баланс: {balance} снежинок")
 
-def is_admin(user_id):
-    return user_id in ADMINS
+@dp.message_handler(lambda msg: msg.text.lower() == "топ") async def show_top(message: types.Message): top = await get_top_users() text = "Топ игроков:\n" for i, user in enumerate(top, 1): uid, uname, bal = user name = uname or f"id{uid}" text += f"{i}. {name} — {bal} снежинок\n" await message.reply(text)
+
+@dp.message_handler(lambda msg: msg.text.lower() == "панель") async def admin_panel(message: types.Message): if message.from_user.id not in ADMINS: return keyboard = InlineKeyboardMarkup().add( InlineKeyboardButton("Просмотр ставок", callback_data="view_bets"), InlineKeyboardButton("Выдать снежинки", callback_data="give_snow") ) await message.reply("Админ-панель:", reply_markup=keyboard)
+
+@dp.callback_query_handler(lambda c: c.data == "view_bets") async def handle_view_bets(callback_query: types.CallbackQuery): if callback_query.from_user.id not in ADMINS: return cursor.execute("SELECT * FROM bets ORDER BY time DESC LIMIT 5") bets = cursor.fetchall() text = "Последние ставки:\n\n" for bet in bets: _, uid, bet_text, amount, result, win, time = bet text += f"{time}: ID {uid} — {bet_text}, выпало {result}, выигрыш: {win}\n" await callback_query.message.edit_text(text)
+
+@dp.callback_query_handler(lambda c: c.data == "give_snow") async def handle_give_snow(callback_query: types.CallbackQuery): await callback_query.message.edit_text("Напиши в формате:\nвыдать <user_id> <сумма>")
+
+@dp.message_handler(lambda msg: msg.text.lower().startswith("выдать")) async def give_snow(message: types.Message): if message.from_user.id not in ADMINS: return parts = message.text.split() if len(parts) != 3: return await message.reply("Формат: выдать <user_id> <сумма>") user_id, amount = int(parts[1]), int(parts[2]) balance = await get_user_balance(user_id) await update_user_balance(user_id, balance + amount) await message.reply(f"Выдано {amount} снежинок пользователю {user_id}")
+
+@dp.message_handler() async def handle_bet(message: types.Message): try: parts = message.text.lower().split() if len(parts) < 2: return amount = int(parts[0]) bets = parts[1:] success, *result = await process_bet(message.from_user.id, amount, bets) if not success: await message.reply(result[0]) return result_num, win = result text = f"Выпало число: {result_num}\n" text += f"Вы {'выиграли ' + str(win) if win > 0 else 'проиграли'} снежинок." await message.reply(text) except ValueError: pass
+
+if name == 'main': executor.start_polling(dp, skip_updates=True)
+
