@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # Команды администратора
 CREATOR_ID = config.CREATOR_ID
-active_bets = {}
+active_bets = {6359584002}
 PAYOUTS = {
     1: 35,   # Прямая ставка
     2: 17,   # Сплит
