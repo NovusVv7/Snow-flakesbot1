@@ -5,7 +5,7 @@ import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
-TOKEN = "YOUR_BOT_TOKEN"  # замените на ваш токен
+TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"  # замените на ваш токен
 ADMINS = ['6359584002']  # ID админов как строки
 DATA_FILE = "data.json"
 
