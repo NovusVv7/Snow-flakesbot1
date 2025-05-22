@@ -37,7 +37,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 # Профиль
-async def профиль(update: Update, context: ContextTypes.DEFAULT_TYPE):  # команда без /
+async def профиль(update: Update, context: ContextTypes.DEFAULT_TYPE):  # команда /профиль
     user_id = update.effective_user.id
     profile = user_profiles.get(user_id, {'comments': [], 'reactions': 0})
     comments = profile['comments']
@@ -79,6 +79,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Сообщение отправлено.")
         except:
             await update.message.reply_text("Не удалось отправить сообщение.")
+        return
+
+    # Обработка мультимедиа
+    if update.message.photo:
+        # Пересылаем фото
+        for photo in update.message.photo:
+            await context.bot.send_photo(chat_id=user_pairs.get(user_id, None), photo=photo.file_id)
+        return
+    elif update.message.video:
+        await context.bot.send_video(chat_id=user_pairs.get(user_id, None), video=update.message.video.file_id)
+        return
+    elif update.message.voice:
+        await context.bot.send_voice(chat_id=user_pairs.get(user_id, None), voice=update.message.voice.file_id)
+        return
+    elif update.message.document:
+        await context.bot.send_document(chat_id=user_pairs.get(user_id, None), document=update.message.document.file_id)
         return
 
     # Если не в паре, ищем другого
@@ -134,9 +150,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("vip", check_vip))
     app.add_handler(CommandHandler("users", list_users))
-    app.add_handler(CommandHandler("профиль", профиль))  # команда без /
+    app.add_handler(CommandHandler("профиль", профиль))
     app.add_handler(CommandHandler("skip", skip))
     app.add_handler(CommandHandler("react", react))
+    # Обработчики мультимедиа
+    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Document.ALL, handle_message))
+    # Обработка текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Бот запущен.")
