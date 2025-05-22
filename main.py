@@ -13,7 +13,7 @@ from aiogram.utils.exceptions import RetryAfter
 logging.basicConfig(level=logging.INFO)
 
 storage = MemoryStorage()
-bot = Bot(7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc, parse_mode=types.ParseMode.HTML)
+bot = Bot(, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=storage)
 dp.middleware.setup(LoggingMiddleware())
 
