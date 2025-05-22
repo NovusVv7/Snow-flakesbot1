@@ -1,181 +1,129 @@
+from aiogram import executor
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from config import TOKEN
+import logging
+import asyncio 
+from handlers import start, profile, promo, roulette, cancel, games, rocket, bonus, p_transfer, referral, mines, crypto, treasury
+from level import level
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from database import create_tables
+from aiogram.utils.exceptions import RetryAfter
 
-import random
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
+logging.basicConfig(level=logging.INFO)
 
-# Токен бота
-TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"  # замените на ваш токен
+storage = MemoryStorage()
+bot = Bot(7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc, parse_mode=types.ParseMode.HTML)
+dp = Dispatcher(bot, storage=storage)
+dp.middleware.setup(LoggingMiddleware())
 
-# Списки и словари
-active_users = set()
-user_pairs = {}  # user_id: partner_id
-user_profiles = {}  # user_id: {'comments': [], 'reactions': 0}
-vip_users = {123456789}  # замените на свои ID
+start.register_start(dp)
+referral.register_handlers_referral(dp, bot)
+treasury.register_handlers_treasury(dp, bot)
+crypto.register_crypto(dp)
+profile.register_profile(dp)
+promo.register_promo(dp)
+level.register_level_handler(dp)
+roulette.register_roulette(dp)
+cancel.register_cancel(dp)
+mines.register_mines(dp)
+games.register_games(dp)
+rocket.register_rocket(dp)
+bonus.register_bonus(dp)
+p_transfer.register_transfer(dp)
 
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    active_users.add(user_id)
-    user_profiles.setdefault(user_id, {'comments': [], 'reactions': 0})
-    await update.message.reply_text("Вы зарегистрированы! Напишите сообщение, и я соединю вас с собеседником.\nИли используйте /поиск для поиска собеседника.")
 
-# Проверка VIP
-async def vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in vip_users:
-        await update.message.reply_text("Вы VIP пользователь! 🎉")
-    else:
-        await update.message.reply_text("Вы не VIP.")
+print("="*90)
+print(" " * 10 + "KRUIN INFINITY ЗАПУЩЕН")
+print("="*90)
 
-# Кто есть в боте
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users_list = list(active_users)
-    if not users_list:
-        text = "Нет активных пользователей."
-    else:
-        text = "Активные пользователи:\n" + "\n".join(str(uid) for uid in users_list)
-    await update.message.reply_text(text)
+async def on_startup(dispatcher: Dispatcher):
+    create_tables()
+    logging.info("Бот запущен")
 
-# Профиль
-async def профиль(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    profile = user_profiles.get(user_id, {'comments': [], 'reactions': 0})
-    comments = profile['comments']
-    reactions = profile['reactions']
-    comments_text = "\n".join(comments) if comments else "Нет комментариев."
-    await update.message.reply_text(
-        f"Ваш профиль:\nКомментарии:\n{comments_text}\nРеакции: {reactions}"
-    )
+async def process_new_member(message: types.Message, bot: Bot):
+    logging.info("process_new_member: ФУНКЦИЯ ВЫЗВАНА!")
+    chat_id = message.chat.id
+    logging.info(f"process_new_member: Новый участник добавлен в чат {chat_id}")
 
-# Реакции
-async def react(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    parts = update.message.text.split()
-    if len(parts) < 2:
-        await update.message.reply_text("Используйте /react 👍 или /react 👎")
+    if not message.new_chat_members:
+        logging.warning(f"process_new_member: Нет информации о новых участниках в чате {chat_id}.")
         return
-    reaction = parts[1]
-    if reaction in ['👍', '👎']:
-        user_profiles.setdefault(user_id, {'comments': [], 'reactions': 0})
-        if reaction == '👍':
-            user_profiles[user_id]['reactions'] += 1
-        else:
-            user_profiles[user_id]['reactions'] -= 1
-        await update.message.reply_text(f"Реакция {reaction} добавлена!")
+
+    logging.info(f"process_new_member: Новые участники: {message.new_chat_members}")
+
+    settings = database.get_chat_settings(chat_id)
+    if not settings:
+        database.create_chat_settings(chat_id)
+        settings = database.get_chat_settings(chat_id)
+
+    logging.info(f"process_new_member: Настройки чата: {settings}")
+
+    if not settings or not settings['is_active']:
+        logging.info(f"process_new_member: Казна выключена или не настроена в чате {chat_id}. Начисление награды пропущено.")
+        return
+
+    reward_per_invite = settings['reward_per_invite']
+    logging.info(f"process_new_member: Награда за приглашение: {reward_per_invite}")
+
+    if reward_per_invite <= 0:
+        logging.info(f"process_new_member: Награда за приглашение не установлена в чате {chat_id}. Начисление награды пропущено.")
+        return
+
+    if message.from_user:
+        inviter_id = message.from_user.id
+        inviter_name = message.from_user.first_name
+        logging.info(f"process_new_member: Пригласивший: ID={inviter_id}, Имя={inviter_name}")
     else:
-        await update.message.reply_text("Допустимы только реакции 👍 или 👎.")
+        logging.warning(f"process_new_member: Не удалось определить пригласившего в чате {chat_id}.")
+        return
 
-# Обработка сообщений и мультимедиа
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    for new_member in message.new_chat_members:
+        if new_member.id == bot.id:
+            logging.info(f"process_new_member: Бот добавлен в чат, награда не начисляется.")
+            continue
 
-    # Если пользователь в паре
-    partner_id = user_pairs.get(user_id)
-    if partner_id:
+        database.add_invite(inviter_id, inviter_name, chat_id)
+        logging.info(f"process_new_member: Добавлена запись о приглашении пользователя {inviter_id} пользователем {new_member.id}.")
+
+        total_reward = reward_per_invite
+
+        treasury_balance = database.get_treasury_balance(chat_id)
+        logging.info(f"process_new_member: Баланс казны: {treasury_balance}")
+
+        if treasury_balance < total_reward:
+            await bot.send_message(chat_id, "Недостаточно средств в казне для выплаты награды за приглашения.")
+            logging.info(f"process_new_member: Недостаточно средств в казне чата {chat_id} для выплаты награды за приглашения.")
+            return
+
+        database.deposit_to_treasury(chat_id, -total_reward)
+        logging.info(f"process_new_member: Выдано {total_reward} из казны.")
+
+        database.clear_invites(chat_id, inviter_id)
+        logging.info(f"process_new_member: Очищен список приглашений для пользователя {inviter_id}.")
+
+        text = f"<a href=\"tg://user?id={inviter_id}\">{inviter_name}</a> пригласил пользователя и получил награду {total_reward} KRUNN"
+
         try:
-            # Пересылаем текст или мультимедиа
-            if update.message.text:
-                await context.bot.send_message(chat_id=partner_id, text=update.message.text)
-            elif update.message.photo:
-                for photo in update.message.photo:
-                    await context.bot.send_photo(chat_id=partner_id, photo=photo.file_id)
-            elif update.message.video:
-                await context.bot.send_video(chat_id=partner_id, video=update.message.video.file_id)
-            elif update.message.voice:
-                await context.bot.send_voice(chat_id=partner_id, voice=update.message.voice.file_id)
-            elif update.message.document:
-                await context.bot.send_document(chat_id=partner_id, document=update.message.document.file_id)
-            else:
-                await context.bot.send_message(chat_id=partner_id, text="Получено мультимедиа.")
-            await update.message.reply_text("Сообщение отправлено.")
-        except:
-            await update.message.reply_text("Не удалось отправить сообщение.")
-        return
+            await bot.send_message(chat_id, text, parse_mode=types.ParseMode.HTML)
+            logging.info(f"process_new_member: Пользователю {inviter_name} начислена награда {total_reward} KRUNN за приглашения в чате {chat_id}")
+            await asyncio.sleep(0.2) 
 
-    # Если не в паре, ищем собеседника
-    await update.message.reply_text("Ищу собеседника... Пожалуйста, подождите.")
-    # Добавляем пользователя в активных
-    active_users.add(user_id)
-    # Ищем другого
-    users_list = list(active_users - {user_id})
-    if not users_list:
-        await update.message.reply_text("Нет других пользователей для общения. Попробуйте позже.")
-        return
+        except RetryAfter as e:
+            logging.warning(f"Флуд контроль нарушился в process_new_member. Попробуй снова через {e.timeout} секунд.")
+            await asyncio.sleep(e.timeout)
+            try:
+                await bot.send_message(chat_id, text, parse_mode=types.ParseMode.HTML)
+            except Exception as ex:
+                logging.error(f"Ошибка отправить сообщение снова : {ex}")
 
-    recipient_id = random.choice(users_list)
-    user_pairs[user_id] = recipient_id
-    user_pairs[recipient_id] = user_id
 
-    await context.bot.send_message(chat_id=recipient_id, text="Вам новый собеседник! Напишите ему сообщение.")
-    await update.message.reply_text("Вы соединены с собеседником!")
+        except Exception as e:
+            logging.error(f"process_new_member: Ошибка при отправке сообщения: {e}")
 
-# Команда /поиск (можно использовать для поиска собеседника)
-async def поиск(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    # Удаляем из пар, если есть
-    partner_id = user_pairs.pop(user_id, None)
-    if partner_id:
-        try:
-            await context.bot.send_message(chat_id=partner_id, text="Ваш собеседник вышел из разговора.")
-        except:
-            pass
-    await update.message.reply_text("Ищу собеседника... Пожалуйста, подождите.")
-    # Добавляем в активных
-    active_users.add(user_id)
-    users_list = list(active_users - {user_id})
-    if not users_list:
-        await update.message.reply_text("Нет других пользователей для общения. Попробуйте позже.")
-        return
-    recipient_id = random.choice(users_list)
-    user_pairs[user_id] = recipient_id
-    user_pairs[recipient_id] = user_id
-    await context.bot.send_message(chat_id=recipient_id, text="Вам новый собеседник! Напишите ему сообщение.")
-    await update.message.reply_text("Вы соединены с новым собеседником!")
+dp.register_message_handler(lambda message: process_new_member(message, bot), content_types=types.ContentTypes.NEW_CHAT_MEMBERS)
 
-# Команда /skip
-async def skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    partner_id = user_pairs.pop(user_id, None)
-    if partner_id:
-        try:
-            await context.bot.send_message(chat_id=partner_id, text="Ваш собеседник пропустил вас.")
-        except:
-            pass
-        user_pairs.pop(partner_id, None)
-        await update.message.reply_text("Вы пропустили собеседника.")
-    else:
-        await update.message.reply_text("Вы не в разговоре.")
-    # Ищем нового
-    active_users.add(user_id)
-    users_list = list(active_users - {user_id})
-    if not users_list:
-        await update.message.reply_text("Нет других пользователей для общения.")
-        return
-    new_partner_id = random.choice(users_list)
-    user_pairs[user_id] = new_partner_id
-    user_pairs[new_partner_id] = user_id
-    await context.bot.send_message(chat_id=new_partner_id, text="Вам новый собеседник! Напишите ему сообщение.")
-    await update.message.reply_text("Вы соединены с новым собеседником!")
-
-# Основная функция
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("vip", vip))
-    app.add_handler(CommandHandler("users", users))
-    app.add_handler(CommandHandler("профиль", профиль))
-    app.add_handler(CommandHandler("react", react))
-    app.add_handler(CommandHandler("поиск", поиск))
-    app.add_handler(CommandHandler("skip", skip))
-    # Обработчики мультимедиа и текста
-    app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VIDEO | filters.VOICE | filters.Document.ALL | filters.TEXT & ~filters.COMMAND,
-        handle_message
-    ))
-
-    print("Бот запущен.")
-    app.run_polling()
 
 if __name__ == '__main__':
-    main()
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+     
