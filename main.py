@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # Команды администратора
 CREATOR_ID = config.CREATOR_ID
-active_bets = {6359584002}
+active_bets = {}
 PAYOUTS = {
     1: 35,   # Прямая ставка
     2: 17,   # Сплит
@@ -213,6 +213,56 @@ def cancel_bet(update: Update, context: CallbackContext):
     else:
         update.message.reply_text("❌ Нет активных ставок")
 
+def add_snowflakes(update: Update, context: CallbackContext):
+    if update.effective_user.id != CREATOR_ID:
+        update.message.reply_text("❌ У вас нет прав на эту команду.")
+        return
+
+    args = context.args
+    if len(args) < 2:
+        update.message.reply_text("❌ Формат: /add_snowflakes @username количество")
+        return
+
+    username = args[0].lstrip('@')
+    try:
+        amount = int(args[1])
+        if amount <= 0:
+            update.message.reply_text("❌ Количество должно быть положительным числом.")
+            return
+    except ValueError:
+        update.message.reply_text("❌ Неверное количество снежинок.")
+        return
+
+    try:
+        with db_transaction():
+            user = cursor.execute(
+                "SELECT user_id FROM users WHERE username=?", 
+                (username,)
+            ).fetchone()
+            
+            if not user:
+                update.message.reply_text("❌ Пользователь не найден.")
+                return
+
+            cursor.execute(
+                "UPDATE users SET snowflakes = snowflakes + ? WHERE user_id=?",
+                (amount, user[0])
+            )
+
+            update.message.reply_text(f"✅ Успешно выдано {amount} снежинок пользователю @{username}.")
+            
+            try:
+                context.bot.send_message(
+                    chat_id=user[0], 
+                    text=f"🎁 Вам было начислено {amount} снежинок!"
+                )
+            except Exception as e:
+                logging.error(f"Ошибка уведомления: {e}")
+
+    except Exception as e:
+        logging.error(f"Ошибка выдачи: {e}")
+        update.message.reply_text("❌ Ошибка выполнения команды.")
+
 def main():
     updater = Updater(config.TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -223,6 +273,11 @@ def main():
     dp.add_handler(MessageHandler(Filters.regex(r'^го$'), start_roulette))
     dp.add_handler(MessageHandler(Filters.regex(r'^отмена$'), cancel_bet))
     dp.add_handler(MessageHandler(Filters.regex(r'^передать '), transfer))
+    dp.add_handler(CommandHandler(
+        "add_snowflakes", 
+        add_snowflakes, 
+        filters=Filters.user(user_id=CREATOR_ID)
+    )
 
     updater.start_polling()
     updater.idle()
