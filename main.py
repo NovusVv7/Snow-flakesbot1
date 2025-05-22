@@ -6,7 +6,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
 import sqlite3, random, time
 
-API_TOKEN = `7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc`
+API_TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
 CREATOR_ID =6359584002  # Ваш Telegram ID
 
 bot = Bot(token=API_TOKEN)
