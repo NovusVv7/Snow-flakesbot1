@@ -68,61 +68,6 @@ async def start(message: types.Message):
         save_db(db)
     await message.answer(f"Добро пожаловать, у вас {db['users'][user_id]['snowflakes']} снежинок.")
 
-# Обработка команд: баланс или б
-@dp.message_handler(lambda message: message.text.lower() == "баланс" or message.text.lower() == "б")
-async def balance(message: types.Message):
-    user_id = str(message.from_user.id)
-    if user_id in db["banned"]:
-        await message.answer("Вы забанены.")
-        return
-    if user_id not in db["users"]:
-        await message.answer("Сначала используйте команду старт")
-        return
-    await message.answer(f"Ваш баланс: {db['users'][user_id]['snowflakes']} снежинок.")
-
-# Обработка команды передача или п
-@dp.message_handler(lambda message: message.text.lower().startswith("п ") or message.text.lower().startswith("передача"))
-async def pay(message: types.Message):
-    user_id = str(message.from_user.id)
-    parts = message.text.split()
-
-    if len(parts) != 3:
-        await message.reply("Используй: П [сумма] [username/id]")
-        return
-
-    amount_str, target = parts[1], parts[2]
-
-    if not amount_str.isdigit():
-        await message.reply("Сумма должна быть числом.")
-        return
-
-    amount = int(amount_str)
-
-    if user_id not in db["users"]:
-        await message.reply("Сначала используйте команду старт")
-        return
-
-    if db["users"][user_id]["snowflakes"] < amount:
-        await message.reply("Недостаточно снежинок.")
-        return
-
-    # Определяем ID цели:
-    if target.isdigit():
-        target_id = target  # Это ID
-    else:
-        target_id = get_user_id_from_username(target)  # Это username
-
-        if target_id is None:
-            await message.reply("Пользователь не найден.")
-            return
-
-    if target_id not in db["users"]:
-        db["users"][target_id] = {"snowflakes": 1000, "username": None}  # Инициализируем пользователя
-    db["users"][user_id]["snowflakes"] -= amount
-    db["users"][target_id]["snowflakes"] += amount
-    await message.reply(f"Вы передали {amount} снежинок пользователю {target}.")
-    save_db(db)
-
 # Обработка команды рулетка или го
 @dp.message_handler(lambda message: message.text.lower().startswith("го") or message.text.lower().startswith("рулетка"))
 async def roulette(message: types.Message):
@@ -136,13 +81,30 @@ async def roulette(message: types.Message):
         return
 
     text = message.text.lower().split()
-    if len(text) != 2 or not text[1].isdigit():
-        await message.reply("Пример: го [ставка] (ставка - число от 50 и выше)")
+    if len(text) < 2:
+        await message.reply("Пример: го [ставка] или го [диапазон от-до] (ставка - число от 50 и выше, например: го 50-10 или го 100)")
         return
 
-    bet = int(text[1])
-    if bet < 50:
-        await message.reply("Минимальная ставка 50 снежинок.")
+    bet_str = text[1]
+    bet_parts = bet_str.split("-")
+    
+    if len(bet_parts) == 1 and bet_parts[0].isdigit():
+        bet = int(bet_parts[0])
+        if bet < 50:
+            await message.reply("Минимальная ставка 50 снежинок.")
+            return
+    elif len(bet_parts) == 2 and all(part.isdigit() for part in bet_parts):
+        bet = int(bet_parts[0])
+        if bet < 50:
+            await message.reply("Минимальная ставка 50 снежинок.")
+            return
+        start_range = int(bet_parts[0])
+        end_range = int(bet_parts[1])
+        if start_range > end_range or start_range < 0 or end_range > 36:
+            await message.reply("Некорректный диапазон, он должен быть от 0 до 36.")
+            return
+    else:
+        await message.reply("Некорректная ставка или диапазон.")
         return
 
     if db["users"][user_id]["snowflakes"] < bet:
@@ -153,10 +115,14 @@ async def roulette(message: types.Message):
     await asyncio.sleep(7)
 
     result = random.randint(0, 36)
-    if result == 0:
-        winnings = bet * 36
+    winnings = 0
+    if len(bet_parts) == 1:
+        if result == bet:
+            winnings = bet * 36  # Ставка на конкретное число (36x)
     else:
-        winnings = 0  # Нет выигрыша
+        # Ставки на диапазоны
+        if start_range <= result <= end_range:
+            winnings = bet * 2  # Ставка на диапазон дает 2x выигрыш
 
     # Логирование результата
     logging.info(f"Рулетка: Вышло число {result}. Ставка: {bet}, Выигрыш: {winnings}.")
