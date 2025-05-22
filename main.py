@@ -5,8 +5,8 @@ import sqlite3
 from datetime import datetime, timedelta
 
 TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
-ADMIN_ID = 6359584002
-GROUP_CHAT_ID = "ВАШ_ID_ЧАТА"
+ADMIN_ID = 6359584002  # Замените на цифровой ID
+GROUP_CHAT_ID = "ВАШ_ID_ЧАТА"  # Замените на ID целевого чата
 
 conn = sqlite3.connect('users.db', check_same_thread=False)
 c = conn.cursor()
@@ -110,16 +110,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Команда доступна только администратору")
         return
     
-    # Общее количество пользователей
     c.execute("SELECT COUNT(*) FROM users")
     total_users = c.fetchone()[0]
     
-    # Активные за последние 24 часа
     active_time = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     c.execute("SELECT COUNT(*) FROM users WHERE last_active > ?", (active_time,))
     active_users = c.fetchone()[0]
     
-    # Количество VIP
     c.execute("SELECT COUNT(*) FROM users WHERE is_vip=1")
     vip_users = c.fetchone()[0]
     
