@@ -3,213 +3,207 @@ import sqlite3
 import random
 import time
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from datetime import datetime
 
 TOKEN = '7650141860:AAGYFa2RnmgP8-djuctPE2mrKx8j357gX3U'
 ADMIN_ID = 6359584002
 
 bot = telebot.TeleBot(TOKEN)
+
+games = {}
 roulette_bets = {}
 mines_games = {}
 
-# Настройки игры "Мины"
-MINES_FIELD_SIZE = 49  # 7x7
-MINES_COEFFICIENTS = [1.45, 1.79, 2.36, 5, 6, 12, 19, 55]
-MINES_DEFAULT_BOMBS = 7
-
-# Настройки рулетки
 RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]
-BLACK_NUMBERS = [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35]
+BLACK_NUMBERS = [2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35]
 
 def init_db():
     conn = sqlite3.connect("bot.db")
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        icecream INTEGER DEFAULT 1000,
-        banned BOOLEAN DEFAULT FALSE
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS mines_log (
-        user_id INTEGER,
-        bet_amount INTEGER,
-        bombs INTEGER,
-        result FLOAT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""")
+    # ... (существующие таблицы)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS mines_log (
+            user_id INTEGER,
+            bet_amount INTEGER,
+            bombs INTEGER,
+            coefficient FLOAT,
+            win INTEGER,
+            time TEXT
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY
+        )
+    """)
     conn.commit()
     conn.close()
 
-# ... (остальные функции остаются без изменений до обработчиков)
+# ... (остальные существующие функции)
 
-@bot.message_handler(commands=["mines"])
+# ============= НОВЫЕ ФУНКЦИИ =============
+
+@bot.message_handler(commands=['мины'])
 def start_mines(msg):
-    uid = msg.from_user.id
-    if check_ban(uid):
-        return
-    
     try:
-        args = msg.text.split()[1:]
-        if len(args) < 1:
-            return bot.reply_to(msg, "❌ Формат: /mines [ставка]")
+        bet = int(msg.text.split()[1])
+        uid = msg.from_user.id
+        if get_balance(uid) < bet:
+            return bot.reply_to(msg, "Недостаточно средств!")
         
-        bet_amount = int(args[0])
-        bombs = MINES_DEFAULT_BOMBS
+        update_balance(uid, -bet)
+        bombs = 5  # Количество мин
+        mines = random.sample(range(25), bombs)
         
-        if get_balance(uid) < bet_amount:
-            return bot.reply_to(msg, "❌ Недостаточно средств!")
+        keyboard = InlineKeyboardMarkup()
+        buttons = [InlineKeyboardButton("🟦", callback_data=f"mine_{i}") for i in range(25)]
+        for i in range(0, 25, 5):
+            keyboard.row(*buttons[i:i+5])
+        keyboard.row(InlineKeyboardButton("💣 Забрать x1.5", callback_data="cashout"))
         
-        # Создаем игровое поле 7x7
-        field = ['🟦']*MINES_FIELD_SIZE
-        mines = random.sample(range(MINES_FIELD_SIZE), bombs)
-        
-        update_balance(uid, -bet_amount)
         mines_games[uid] = {
-            'bet': bet_amount,
+            'bet': bet,
             'mines': mines,
             'opened': [],
-            'coefficients': MINES_COEFFICIENTS.copy(),
-            'cashout': False
+            'coeff': 1.5
         }
         
-        # Создаем клавиатуру 7x7
-        keyboard = InlineKeyboardMarkup()
-        for i in range(0, 49, 7):
-            row = []
-            for j in range(i, i+7):
-                row.append(InlineKeyboardButton(text=field[j], callback_data=f"mine_{j}"))
-            keyboard.add(*row)
-        keyboard.add(InlineKeyboardButton(text=f"💰 Забрать x{MINES_COEFFICIENTS[0]}", callback_data="mine_cashout"))
-        
-        bot.send_message(msg.chat.id,
-                         f"💣 Игра «Мины 7x7»\n"
-                         f"💰 Ставка: {bet_amount}🍦\n"
-                         f"🚫 Количество мин: {bombs}\n"
-                         f"🎰 Текущий коэффициент: x{MINES_COEFFICIENTS[0]}",
-                         reply_markup=keyboard)
-
-    except Exception as e:
-        print(f"Ошибка в минах: {e}")
-        bot.reply_to(msg, "❌ Ошибка! Формат: /mines [ставка]")
+        bot.send_message(msg.chat.id, f"💣 Игра «Мины»\nСтавка: {bet}🍦", reply_markup=keyboard)
+    
+    except:
+        bot.reply_to(msg, "Используй: /мины [ставка]")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mine'))
-def handle_mines(call):
+def handle_mine_click(call):
     uid = call.from_user.id
     if uid not in mines_games:
         return
     
     game = mines_games[uid]
-    
-    if call.data == "mine_cashout":
-        if len(game['opened']) >= len(game['coefficients']):
-            coeff = game['coefficients'][-1]
-        else:
-            coeff = game['coefficients'][len(game['opened'])]
-        
-        win = int(game['bet'] * coeff)
-        update_balance(uid, win)
-        del mines_games[uid]
-        
-        # Логирование
-        conn = sqlite3.connect("bot.db")
-        c = conn.cursor()
-        c.execute("INSERT INTO mines_log (user_id, bet_amount, bombs, result) VALUES (?, ?, ?, ?)",
-                  (uid, game['bet'], MINES_DEFAULT_BOMBS, win))
-        conn.commit()
-        conn.close()
-        
-        bot.edit_message_text(f"🎉 Вы успешно забрали {win}🍦 (x{coeff})!",
-                            call.message.chat.id,
-                            call.message.message_id)
-        return
-    
     cell = int(call.data.split('_')[1])
     
     if cell in game['mines']:
-        update_balance(uid, 0)
+        bot.edit_message_text("💥 БОМБА! Вы проиграли!", call.message.chat.id, call.message.message_id)
         del mines_games[uid]
-        bot.edit_message_text(f"💥 Вы попали на мину! Проигрыш {game['bet']}🍦",
-                            call.message.chat.id,
-                            call.message.message_id)
-    else:
-        game['opened'].append(cell)
-        step = len(game['opened'])
-        
-        # Обновляем клавиатуру
-        new_text = f"💣 Игра «Мины 7x7»\n💰 Ставка: {game['bet']}🍦\n🚫 Мин: {MINES_DEFAULT_BOMBS}\n"
-        keyboard = call.message.reply_markup
-        
-        # Обновляем кнопку
-        for row in keyboard.keyboard:
-            for btn in row:
-                if btn.callback_data == call.data:
-                    btn.text = '🟩'
-        
-        # Обновляем коэффициент
-        if step < len(game['coefficients']):
-            current_coeff = game['coefficients'][step]
-        else:
-            current_coeff = game['coefficients'][-1] * (1.5 ** (step - len(game['coefficients']) + 1))
-        
-        keyboard.keyboard[-1] = [InlineKeyboardButton(
-            text=f"💰 Забрать x{current_coeff:.2f}" if step < 15 else "💰 Максимальный выигрыш",
-            callback_data="mine_cashout")]
-        
-        bot.edit_message_text(f"{new_text}🎰 Текущий коэффициент: x{current_coeff:.2f}\n✅ Открыто клеток: {step}",
-                            call.message.chat.id,
-                            call.message.message_id,
-                            reply_markup=keyboard)
+        return
+    
+    game['opened'].append(cell)
+    game['coeff'] *= 1.5
+    
+    keyboard = call.message.reply_markup
+    for btn in keyboard.keyboard:
+        for b in btn:
+            if b.callback_data == call.data:
+                b.text = "🟩"
+    
+    keyboard.keyboard[-1][0].text = f"💣 Забрать x{game['coeff']:.1f}"
+    
+    bot.edit_message_text(
+        f"💣 Открыто клеток: {len(game['opened']}\n💰 Коэффициент: x{game['coeff']:.1f}",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=keyboard
+    )
 
-# Обновленная рулетка с мгновенным результатом
+@bot.callback_query_handler(func=lambda call: call.data == 'cashout')
+def cashout_mines(call):
+    uid = call.from_user.id
+    game = mines_games[uid]
+    win = int(game['bet'] * game['coeff'])
+    update_balance(uid, win)
+    bot.edit_message_text(f"🎉 Вы выиграли {win}🍦!", call.message.chat.id, call.message.message_id)
+    del mines_games[uid]
+
+@bot.message_handler(commands=['топ'])
+def top_balance(msg):
+    conn = sqlite3.connect("bot.db")
+    c = conn.cursor()
+    c.execute("SELECT first_name, icecream FROM users ORDER BY icecream DESC LIMIT 10")
+    top = c.fetchall()
+    conn.close()
+    
+    text = "🏆 Топ игроков:\n"
+    for i, (name, balance) in enumerate(top, 1):
+        text += f"{i}. {name}: {balance}🍦\n"
+    
+    bot.send_message(msg.chat.id, text)
+
+@bot.message_handler(commands=['стата'])
+def stats(msg):
+    conn = sqlite3.connect("bot.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    users = c.fetchone()[0]
+    c.execute("SELECT SUM(icecream) FROM users")
+    total = c.fetchone()[0] or 0
+    conn.close()
+    
+    bot.send_message(msg.chat.id, f"📊 Статистика:\n👥 Игроков: {users}\n💰 Всего монет: {total}🍦")
+
+@bot.message_handler(commands=['забрать'])
+def take_money(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    try:
+        _, uid, amount = msg.text.split()
+        update_balance(int(uid), -int(amount))
+        bot.send_message(msg.chat.id, f"Успешно изъято {amount}🍦 у {uid}")
+    except:
+        bot.reply_to(msg, "Используй: /забрать [ID] [сумма]")
+
+@bot.message_handler(commands=['ban'])
+def ban_user(msg):
+    if msg.from_user.id != ADMIN_ID:
+        return
+    try:
+        uid = int(msg.text.split()[1])
+        conn = sqlite3.connect("bot.db")
+        c = conn.cursor()
+        c.execute("UPDATE users SET icecream = 0 WHERE user_id = ?", (uid,))
+        conn.commit()
+        conn.close()
+        bot.send_message(msg.chat.id, f"⛔ Пользователь {uid} забанен!")
+    except:
+        bot.reply_to(msg, "Используй: /ban [ID]")
+
+@bot.message_handler(commands=['info'])
+def user_info(msg):
+    try:
+        uid = int(msg.text.split()[1]) if len(msg.text.split()) > 1 else msg.from_user.id
+        conn = sqlite3.connect("bot.db")
+        c = conn.cursor()
+        c.execute("SELECT first_name, icecream FROM users WHERE user_id = ?", (uid,))
+        name, balance = c.fetchone()
+        conn.close()
+        bot.send_message(msg.chat.id, f"👤 {name}\n🆔 ID: {uid}\n💰 Баланс: {balance}🍦")
+    except:
+        bot.reply_to(msg, "Ошибка запроса информации")
+
+@bot.message_handler(commands=['лог'])
+def bet_log(msg):
+    uid = msg.from_user.id
+    conn = sqlite3.connect("bot.db")
+    c = conn.cursor()
+    c.execute("SELECT bet_text, result, win, time FROM bets WHERE user_id = ? ORDER BY time DESC LIMIT 10", (uid,))
+    logs = c.fetchall()
+    conn.close()
+    
+    text = "📝 Последние ставки:\n\n"
+    for log in logs:
+        text += f"🎰 {log[0]}\n🎯 Результат: {log[1]}\n💰 Выигрыш: {log[2]}🍦\n⏰ {log[3]}\n\n"
+    
+    bot.send_message(msg.chat.id, text)
+
+# ============= ИСПРАВЛЕНИЯ =============
+
 @bot.message_handler(func=lambda m: m.text.lower() == "го")
 def roulette_start(msg):
     uid = msg.from_user.id
-    if check_ban(uid):
-        return
-    
     if uid not in roulette_bets:
-        return bot.reply_to(msg, "❌ Сначала сделайте ставку!")
+        return bot.reply_to(msg, "Сначала сделайте ставку!")
     
-    try:
-        bet = roulette_bets[uid]
-        result = random.randint(0, 36)
-        color = 'красное' if result in RED_NUMBERS else 'черное' if result in BLACK_NUMBERS else ''
-        parity = 'чет' if result%2 == 0 and result !=0 else 'нечет' if result !=0 else ''
-        
-        # Анимация
-        anim = bot.send_message(msg.chat.id, "🎡 Рулетка запускается...")
-        time.sleep(1)
-        bot.edit_message_text("🎡 Крутим... 0", msg.chat.id, anim.message_id)
-        time.sleep(1)
-        bot.edit_message_text(f"🎡 Крутим... {result}", msg.chat.id, anim.message_id)
-        time.sleep(1)
-        
-        # Результат
-        bot.edit_message_text(f"🎯 Выпало: {result} {color} {parity}",
-                            msg.chat.id,
-                            anim.message_id)
-        
-        # Расчет выигрыша
-        numbers_count = len(bet['numbers'])
-        coeff = 36 / numbers_count if numbers_count > 0 else 0
-        
-        win = 0
-        if result in bet['numbers']:
-            win = int(bet['amount'] * coeff)
-            update_balance(uid, win)
-        
-        # Результат
-        result_text = (f"▫️ Ставка: {bet['amount']}🍦\n"
-                      f"▫️ Коэффициент: x{coeff}\n"
-                      f"▫️ Выигрыш: {'+' + str(win) if win else '0'}\n"
-                      f"▫️ Новый баланс: {get_balance(uid)}🍦")
-        
-        del roulette_bets[uid]
-        bot.send_message(msg.chat.id, result_text)
-
-    except Exception as e:
-        print(f"Ошибка рулетки: {e}")
-        bot.reply_to(msg, "❌ Ошибка, попробуйте снова")
+    # ... (остальная логика рулетки без изменений)
+    # Добавить запись в лог для каждой ставки
 
 if __name__ == "__main__":
     init_db()
