@@ -5,7 +5,7 @@ import datetime
 import threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-TOKEN = '7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3f'
+TOKEN = '7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc'
 ADMIN_ID = 6359584002
 
 bot = telebot.TeleBot(TOKEN)
