@@ -1,6 +1,7 @@
 import telebot
 import sqlite3
 import random
+import threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = '7650141860:AAGYFa2RnmgP8-djuctPE2mrKx8j357gX3U'
@@ -213,34 +214,44 @@ def go_roulette(msg):
     if uid not in roulette_bets:
         return bot.send_message(msg.chat.id, "❌ Сначала сделай ставки! 🎰")
     
-    bot.send_animation(msg.chat.id, animation="CgACAgIAAxkBAAICVGgyo8fx8r0-BW034uQ30js0atY1AAICWQAC96p5SC81RvIZJygENgQ")
+    sent_animation = bot.send_animation(msg.chat.id, animation="CgACAgIAAxkBAAICVGgyo8fx8r0-BW034uQ30js0atY1AAICWQAC96p5SC81RvIZJygENgQ")
+    
+    def delete_animation():
+        try:
+            bot.delete_message(msg.chat.id, sent_animation.message_id)
+        except Exception as e:
+            print(f"Ошибка удаления гифки: {e}")
+    
+    threading.Timer(7.0, delete_animation).start()
     
     bets = roulette_bets.pop(uid)
     result = random.randint(0, 36)
     win_total = 0
-    text = f"🎰 Выпало: {result}\n\n"
+    text = f"🎰 Выпало: {result} {'🔴' if result in RED_NUMS else '⚫' if result !=0 else '🟣'}\n\n"
     
     for bet in bets:
         amount = bet['amount']
         target = bet['target']
         win = False
+        prize = 0
         
-        if isinstance(target, list):
-            if result in target:
-                prize = amount * (36 // len(target))
+        if isinstance(target, int):
+            if result == target:
+                prize = amount * 36
                 win = True
-        elif target == "odd" and result % 2 == 1:
-            prize = amount * 2
-            win = True
-        elif target == "even" and result != 0 and result % 2 == 0:
-            prize = amount * 2
-            win = True
-        elif target == "red" and result in RED_NUMS:
-            prize = amount * 2
-            win = True
-        elif target == "black" and result in BLACK_NUMS:
-            prize = amount * 2
-            win = True
+        elif isinstance(target, str):
+            if target == "odd" and result % 2 == 1 and result != 0:
+                prize = amount * 2
+                win = True
+            elif target == "even" and result != 0 and result % 2 == 0:
+                prize = amount * 2
+                win = True
+            elif target == "red" and result in RED_NUMS:
+                prize = amount * 2
+                win = True
+            elif target == "black" and result in BLACK_NUMS and result != 0:
+                prize = amount * 2
+                win = True
         
         if win:
             update_balance(uid, prize)
@@ -249,6 +260,7 @@ def go_roulette(msg):
         else:
             text += f"❌ {amount}🍧 на {target} → Проигрыш\n"
     
+    text += f"\n💸 Общий выигрыш: {win_total}🍧" if win_total else ""
     bot.send_message(msg.chat.id, text)
 
 @bot.message_handler(func=lambda m: m.text.lower().startswith("п") and m.reply_to_message)
@@ -315,22 +327,35 @@ def parse_bets(msg):
             return bot.reply_to(msg, "⚠️ Мин. ставка: 10🍧")
         
         targets = parts[1:]
-        total = amount * len(targets)
+        valid_targets = []
+        for t in targets:
+            if t.isdigit():
+                num = int(t)
+                if 0 <= num <= 36:
+                    valid_targets.append(num)
+            elif t in ['red', 'black', 'even', 'odd']:
+                valid_targets.append(t)
+        
+        if not valid_targets:
+            return bot.reply_to(msg, "❌ Нет валидных ставок")
+        
+        total = amount * len(valid_targets)
         
         if get_balance(uid) < total:
-            return bot.reply_to(msg, f"❌ Недостаточно мороженого для {len(targets)} ставок 🍨")
+            return bot.reply_to(msg, f"❌ Недостаточно мороженого для {len(valid_targets)} ставок 🍨")
         
         update_balance(uid, -total)
         roulette_bets[uid] = []
         
-        for t in targets:
+        for t in valid_targets:
             roulette_bets[uid].append({
                 'amount': amount,
                 'target': t
             })
         
-        bot.reply_to(msg, f"✅ Принято {len(targets)} ставок по {amount}🍧. Пиши 'Го' для запуска! 🎰")
-    except:
+        bot.reply_to(msg, f"✅ Принято {len(valid_targets)} ставок по {amount}🍧. Пиши 'Го' для запуска! 🎰")
+    except Exception as e:
+        print(f"Ошибка в ставках: {e}")
         return
 
 if __name__ == "__main__":
