@@ -97,11 +97,16 @@ def transfer(msg):
 
 def process_bet(p):
     p = p.lower()
-    if p == 'чет': return [n for n in range(1,37) if n%2 == 0]
-    elif p == 'нечет': return [n for n in range(1,37) if n%2 != 0]
-    elif p == 'красное': return RED_NUMBERS
-    elif p == 'черное': return BLACK_NUMBERS
-    elif p.isdigit() and 0 <= int(p) <= 36: return [int(p)]
+    if p in ['чет', 'even', 'чёт', 'четное', 'ч']:
+        return [n for n in range(1,37) if n%2 == 0]
+    elif p in ['нечет', 'odd', 'нечёт', 'нечетное', 'н']:
+        return [n for n in range(1,37) if n%2 != 0]
+    elif p in ['красное', 'red', 'к']:
+        return RED_NUMBERS
+    elif p in ['черное', 'black', 'ч']:
+        return BLACK_NUMBERS
+    elif p.isdigit() and 0 <= int(p) <= 36:
+        return [int(p)]
     return None
 
 @bot.message_handler(func=lambda m: True)
@@ -120,27 +125,29 @@ def parse_bets(msg):
             if nums:
                 numbers.extend(nums)
                 types.append(p)
+        numbers = list(set(numbers))
         if not numbers:
             return bot.reply_to(msg, "Укажи числа или типы (чет, нечет, красное, черное)")
-    except:
+    except Exception as e:
+        print(e)
         return bot.reply_to(msg, "Ошибка в ставке.")
 
-    total = amount * len(set(numbers))
+    total = amount
     if get_balance(uid) < total:
         return bot.reply_to(msg, f"Нужно {total}🍦 на ставку!")
 
     update_balance(uid, -total)
     roulette_bets.setdefault(uid, []).append({
         'amount': amount,
-        'numbers': list(set(numbers)),
+        'numbers': numbers,
         'type': types
     })
-    bot.reply_to(msg, f"✅ Принято! Всего ставок: {len(set(numbers))}\nНапиши 'Го' для запуска!🎰")
+    bot.reply_to(msg, f"✅ Принято! Ставка на {len(numbers)} чисел\nНапиши 'Го' для запуска!🎰")
 
 @bot.message_handler(func=lambda m: m.text.lower() == "го")
 def roulette_start(msg):
     uid = msg.from_user.id
-    if uid not in roulette_bets:
+    if uid not in roulette_bets or not roulette_bets[uid]:
         return bot.reply_to(msg, "Ты ещё не сделал ставку!")
 
     anim = bot.send_message(msg.chat.id, "🎡 Рулетка запущена...")
@@ -169,19 +176,19 @@ def roulette_start(msg):
             win = int(amount * coeff)
             update_balance(uid, win)
             total_win += win
-            report.append(f"✅ {bet['type']} x{round(coeff,2)} → +{win}🍦")
+            report.append(f"✅ {', '.join(bet['type'])} x{round(coeff,2)} → +{win}🍦")
         else:
-            report.append(f"❌ {bet['type']} → 0")
+            report.append(f"❌ {', '.join(bet['type'])} → 0")
 
-        # Лог в базу
         c.execute("INSERT INTO roulette_log (user_id, username, bet_amount, bet_numbers, result, win_amount) VALUES (?, ?, ?, ?, ?, ?)",
-                  (uid, msg.from_user.username, amount, str(bet['type']), result, win))
+                  (uid, msg.from_user.username, amount, str(nums), result, win))
 
     conn.commit()
     conn.close()
 
     del roulette_bets[uid]
-    bot.send_message(msg.chat.id, f"Результаты:\n" + "\n".join(report) + f"\n\nОбщий выигрыш: {total_win}🍦")
+    result_msg = "Результаты:\n" + "\n".join(report) + f"\n\nОбщий выигрыш: {total_win}🍦"
+    bot.send_message(msg.chat.id, result_msg)
 
 if __name__ == "__main__":
     init_db()
