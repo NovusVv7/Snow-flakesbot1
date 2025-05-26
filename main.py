@@ -4,9 +4,10 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
-from aiogram.client.default import DefaultBotProperties  # ВАЖНО
+from aiogram.client.default import DefaultBotProperties
 
 TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
+COIN_GIF_FILE_ID = "CgACAgIAAxkBAAIHfWg0XcbbLagD4qNaZXABCAeslf04AAI3dAACxl2gSSzMTBfFw2uVNgQ"  # СЮДА вставишь file_id после получения
 
 bot = Bot(
     token=TOKEN,
@@ -27,6 +28,12 @@ def get_balance(user_id: int) -> int:
 def update_balance(user_id: int, amount: int):
     get_balance(user_id)
     user_balances[user_id] += amount
+
+# Обработчик гифок: получаем file_id
+@dp.message(lambda m: m.animation)
+async def handle_gif(message: Message):
+    file_id = message.animation.file_id
+    await message.answer(f"file_id этой гифки:\n<code>{file_id}</code>")
 
 @dp.message()
 async def handle_message(message: Message):
@@ -56,6 +63,11 @@ async def handle_message(message: Message):
         if amount > balance:
             await message.answer("Недостаточно средств.")
             return
+
+        # Гифка монеты
+        if COIN_GIF_FILE_ID != "GIF_FILE_ID_ЗДЕСЬ":
+            await message.answer_animation(COIN_GIF_FILE_ID, caption="Бросаю монету...")
+            await asyncio.sleep(2)
 
         result = random.choice(["Орёл", "Решка"])
         if choice.lower() == result.lower():
