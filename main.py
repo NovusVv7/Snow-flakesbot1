@@ -4,10 +4,14 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Message
+from aiogram.client.default import DefaultBotProperties  # ВАЖНО
 
 TOKEN = "7561318621:AAHLIMv1cQPXSkBYWkFCeys5XsXg2c4M3fc"
 
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(
+    token=TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher(storage=MemoryStorage())
 
 roulette_history = []
@@ -21,7 +25,7 @@ def get_balance(user_id: int) -> int:
     return user_balances[user_id]
 
 def update_balance(user_id: int, amount: int):
-    get_balance(user_id)  # инициализация, если нужно
+    get_balance(user_id)
     user_balances[user_id] += amount
 
 @dp.message()
