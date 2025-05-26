@@ -1,4 +1,3 @@
  aiogram
  sqlalchemy
  aiosqlite
-python -m  install --upgrade pip
