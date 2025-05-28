@@ -2,4 +2,3 @@
  sqlalchemy
  aiosqlite
 aiogram==3.5.0
-python-3.11.9
